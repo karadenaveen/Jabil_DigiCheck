@@ -337,6 +337,57 @@ export function extractChecklistRows(sheet) {
 }
 
 /**
+ * Extracts the real Doc Number as it literally appears in the uploaded
+ * workbook — e.g. a cover-page cell like "Doc. number : 43-ME80-F29-ASLY-00001"
+ * or a checksheet header cell like "Doc No :43-ME80-F29-ASLY-00001-B".
+ * Never fabricates a value: if no matching cell is found, returns ''.
+ *
+ * Cover-page style cells often pack "Doc. number : ...\nDoc Title : ..."
+ * into one cell — each cell's text is split on newlines first so the
+ * match stays scoped to just the Doc Number line.
+ */
+const DOC_NO_REGEX = /doc\.?\s*(?:no\.?|number)\s*[:\-]?\s*([A-Za-z0-9][A-Za-z0-9\-\/]*)/i;
+
+function scanSheetForDocNumber(sheet) {
+  for (let r = 1; r <= sheet.rowCount; r++) {
+    for (let c = 1; c <= sheet.colCount; c++) {
+      const cellData = sheet.cells[`${r}_${c}`];
+      if (!cellData || cellData.value === '' || cellData.value === undefined || cellData.value === null) continue;
+      const text = String(cellData.value);
+      for (const line of text.split(/\r?\n/)) {
+        const match = line.match(DOC_NO_REGEX);
+        if (match && match[1]) {
+          // Trim stray trailing punctuation picked up by the loose match
+          return match[1].trim().replace(/[.,;]+$/, '');
+        }
+      }
+    }
+  }
+  return '';
+}
+
+export function extractDocNumber(rawWorkbook) {
+  if (!rawWorkbook || !Array.isArray(rawWorkbook.sheets)) return '';
+
+  // Prefer a cover-page-style sheet first — it typically holds the clean,
+  // canonical Doc Number without a revision suffix tacked on.
+  const coverSheet = rawWorkbook.sheets.find((s) => /cover/i.test(s.name || ''));
+  if (coverSheet) {
+    const fromCover = scanSheetForDocNumber(coverSheet);
+    if (fromCover) return fromCover;
+  }
+
+  // Fall back to scanning every sheet in order (e.g. the checksheet's own
+  // "Doc No :" header cell) until a real match is found.
+  for (const sheet of rawWorkbook.sheets) {
+    const found = scanSheetForDocNumber(sheet);
+    if (found) return found;
+  }
+
+  return '';
+}
+
+/**
  * Reconstructs a real, downloadable .xlsx file from parsed `gridData`
  * (produced by parseWorkbookFile) plus a filled-answers map (keys
  * "sheetIdx_row_col" -> string, exactly as produced by ExcelSheetFillView).
@@ -377,10 +428,16 @@ export async function buildFilledWorkbookBlob(gridData, answers = {}) {
         const answerValue = answers[answerKey];
 
         const hasOriginal = cellData && cellData.value !== '' && cellData.value !== undefined;
-        if (!hasOriginal && (answerValue === undefined || answerValue === '')) continue;
+        const hasAnswer = answerValue !== undefined && answerValue !== '';
+        if (!hasOriginal && !hasAnswer) continue;
 
         const cell = ws.getCell(r, c);
-        cell.value = hasOriginal ? cellData.value : answerValue;
+        // Prefer the operator's recorded answer — newer submissions send a
+        // full snapshot of every cell (edits AND untouched originals), so
+        // this is what lets a correction to originally-filled text
+        // actually survive into the exported file. Older submissions that
+        // only recorded blanks still fall back to the original correctly.
+        cell.value = hasAnswer ? answerValue : cellData.value;
 
         if (cellData) {
           if (cellData.fill) {

@@ -43,6 +43,7 @@ export const submissionModel = {
              s.operator_name as operatorName, s.operator_ntid as operatorNTID,
              s.submitted_at as submittedAt, DATE_FORMAT(s.date, '%Y-%m-%d') as date,
              s.status, s.rejection_remark as rejectionRemark, s.reviewed_at as reviewedAt,
+             s.shift_leader_name as shiftLeaderName, s.shift_leader_reviewed_at as shiftLeaderReviewedAt,
              s.grid_answers as gridAnswers, s.filled_excel_path as filledExcelPath, s.created_at as createdAt
       FROM submissions s
       ${baseSql}
@@ -103,6 +104,7 @@ export const submissionModel = {
              s.operator_name as operatorName, s.operator_ntid as operatorNTID,
              s.submitted_at as submittedAt, DATE_FORMAT(s.date, '%Y-%m-%d') as date,
              s.status, s.rejection_remark as rejectionRemark, s.reviewed_at as reviewedAt,
+             s.shift_leader_name as shiftLeaderName, s.shift_leader_reviewed_at as shiftLeaderReviewedAt,
              s.grid_answers as gridAnswers, s.filled_excel_path as filledExcelPath, s.created_at as createdAt
       FROM submissions s
       WHERE s.id = ? AND s.deleted_at IS NULL
@@ -217,22 +219,34 @@ export const submissionModel = {
     };
   },
 
-  updateStatus: async (id, status, rejectionRemark = '', reviewerName = 'ADMIN', reviewerId = 'usr-admin', dbConnection = null) => {
+  updateStatus: async (id, status, rejectionRemark = '', reviewerName = 'ADMIN', reviewerId = 'usr-admin', dbConnection = null, extra = {}) => {
     const executor = dbConnection || pool;
     const reviewedAt = new Date().toLocaleString();
+    const isRejection = status.startsWith('Rejected');
 
-    const [result] = await executor.query(`
-      UPDATE submissions
-      SET status = ?, rejection_remark = ?, reviewed_at = ?, reviewed_by = ?, updated_by = ?, updated_at = CURRENT_TIMESTAMP
-      WHERE id = ? AND deleted_at IS NULL;
-    `, [
-      status,
-      status === 'Rejected' ? rejectionRemark : '',
-      reviewedAt,
-      reviewerName,
-      reviewerName,
-      id
-    ]);
+    // When a Shift Leader approves a submission forward to Admin
+    // (status becomes 'PendingAdmin'), remember their name/time separately
+    // so the Admin's queue can still show who reviewed it at stage 1 even
+    // after Admin's own decision overwrites reviewed_by/reviewed_at.
+    const shiftLeaderName = extra.shiftLeaderName ?? null;
+    const shiftLeaderReviewedAt = extra.shiftLeaderName ? reviewedAt : null;
+
+    const sql = shiftLeaderName
+      ? `UPDATE submissions
+         SET status = ?, rejection_remark = ?, reviewed_at = ?, reviewed_by = ?,
+             shift_leader_name = ?, shift_leader_reviewed_at = ?,
+             updated_by = ?, updated_at = CURRENT_TIMESTAMP
+         WHERE id = ? AND deleted_at IS NULL;`
+      : `UPDATE submissions
+         SET status = ?, rejection_remark = ?, reviewed_at = ?, reviewed_by = ?,
+             updated_by = ?, updated_at = CURRENT_TIMESTAMP
+         WHERE id = ? AND deleted_at IS NULL;`;
+
+    const params = shiftLeaderName
+      ? [status, isRejection ? rejectionRemark : '', reviewedAt, reviewerName, shiftLeaderName, shiftLeaderReviewedAt, reviewerName, id]
+      : [status, isRejection ? rejectionRemark : '', reviewedAt, reviewerName, reviewerName, id];
+
+    const [result] = await executor.query(sql, params);
 
     if (!result.affectedRows) {
       return null;
@@ -246,11 +260,85 @@ export const submissionModel = {
       historyId,
       id,
       reviewerId || 'usr-admin',
-      status === 'Approved' ? 'APPROVED' : 'REJECTED',
+      isRejection ? 'REJECTED' : 'APPROVED',
       rejectionRemark || null,
       reviewerName,
       reviewerName
     ]);
+
+    return submissionModel.getSubmissionById(id);
+  },
+
+  // Shift Leader edits & resends an Admin-rejected submission — same
+  // record, status goes back to 'PendingAdmin' for a fresh Admin decision.
+  resubmitToAdmin: async (id, reviewerName = 'SHIFT_LEADER', reviewerId = 'usr-shiftleader', dbConnection = null) => {
+    const executor = dbConnection || pool;
+    const reviewedAt = new Date().toLocaleString();
+
+    const [result] = await executor.query(`
+      UPDATE submissions
+      SET status = 'PendingAdmin', rejection_remark = '', reviewed_at = ?, reviewed_by = ?,
+          shift_leader_name = ?, shift_leader_reviewed_at = ?,
+          updated_by = ?, updated_at = CURRENT_TIMESTAMP
+      WHERE id = ? AND deleted_at IS NULL;
+    `, [reviewedAt, reviewerName, reviewerName, reviewedAt, reviewerName, id]);
+
+    if (!result.affectedRows) return null;
+
+    const historyId = `hist-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
+    await executor.query(`
+      INSERT INTO approval_history (id, submission_id, reviewer_id, action, remark, created_by, updated_by)
+      VALUES (?, ?, ?, 'RESUBMITTED', ?, ?, ?);
+    `, [historyId, id, reviewerId || 'usr-shiftleader', 'Edited and resubmitted to Admin for review.', reviewerName, reviewerName]);
+
+    return submissionModel.getSubmissionById(id);
+  },
+
+  // Shift Leader edits row check marks (V/X per station) and/or proof
+  // photos while the submission is at their stage ('Pending' or
+  // 'RejectedByAdmin'), through the same full checklist edit form the
+  // Operator uses.
+  updateChecks: async (id, checks, proofPhotos = {}, updatedBy = 'SHIFT_LEADER', dbConnection = null) => {
+    const executor = dbConnection || pool;
+    const rowIds = Object.keys(checks || {});
+
+    for (const rId of rowIds) {
+      const stationObj = checks[rId] || {};
+      const photoUrl = proofPhotos ? proofPhotos[rId] : undefined;
+
+      if (photoUrl !== undefined) {
+        await executor.query(`
+          UPDATE submission_answers
+          SET station_1 = ?, station_2 = ?, station_3 = ?, station_4 = ?,
+              proof_photo_url = ?, updated_by = ?, updated_at = CURRENT_TIMESTAMP
+          WHERE submission_id = ? AND row_no = ? AND deleted_at IS NULL;
+        `, [
+          stationObj[1] || 'V',
+          stationObj[2] || 'V',
+          stationObj[3] || 'V',
+          stationObj[4] || 'V',
+          photoUrl || null,
+          updatedBy,
+          id,
+          parseInt(rId, 10)
+        ]);
+      } else {
+        await executor.query(`
+          UPDATE submission_answers
+          SET station_1 = ?, station_2 = ?, station_3 = ?, station_4 = ?,
+              updated_by = ?, updated_at = CURRENT_TIMESTAMP
+          WHERE submission_id = ? AND row_no = ? AND deleted_at IS NULL;
+        `, [
+          stationObj[1] || 'V',
+          stationObj[2] || 'V',
+          stationObj[3] || 'V',
+          stationObj[4] || 'V',
+          updatedBy,
+          id,
+          parseInt(rId, 10)
+        ]);
+      }
+    }
 
     return submissionModel.getSubmissionById(id);
   },
@@ -276,8 +364,8 @@ export const submissionModel = {
       SELECT 
         COUNT(*) as totalRecords,
         SUM(CASE WHEN status = 'Approved' THEN 1 ELSE 0 END) as completedForms,
-        SUM(CASE WHEN status = 'Pending' THEN 1 ELSE 0 END) as pendingForms,
-        SUM(CASE WHEN status = 'Rejected' THEN 1 ELSE 0 END) as rejectedForms
+        SUM(CASE WHEN status IN ('Pending', 'PendingAdmin') THEN 1 ELSE 0 END) as pendingForms,
+        SUM(CASE WHEN status IN ('Rejected', 'RejectedByShiftLeader', 'RejectedByAdmin') THEN 1 ELSE 0 END) as rejectedForms
       FROM submissions
       WHERE deleted_at IS NULL;
     `);
@@ -308,7 +396,7 @@ export const submissionModel = {
       SELECT DATE_FORMAT(s.date, '%b %d') as name, s.date as sortKey,
         COUNT(*) as submissions,
         SUM(CASE WHEN s.status = 'Approved' THEN 1 ELSE 0 END) as approved,
-        SUM(CASE WHEN s.status = 'Rejected' THEN 1 ELSE 0 END) as rejected
+        SUM(CASE WHEN s.status IN ('Rejected', 'RejectedByShiftLeader', 'RejectedByAdmin') THEN 1 ELSE 0 END) as rejected
       FROM submissions s
       WHERE s.deleted_at IS NULL AND s.date >= DATE_SUB(CURDATE(), INTERVAL 13 DAY)
       GROUP BY s.date
@@ -319,7 +407,7 @@ export const submissionModel = {
       SELECT DATE_FORMAT(s.date, '%b %Y') as name, DATE_FORMAT(s.date, '%Y-%m') as sortKey,
         COUNT(*) as submissions,
         SUM(CASE WHEN s.status = 'Approved' THEN 1 ELSE 0 END) as approved,
-        SUM(CASE WHEN s.status = 'Rejected' THEN 1 ELSE 0 END) as rejected
+        SUM(CASE WHEN s.status IN ('Rejected', 'RejectedByShiftLeader', 'RejectedByAdmin') THEN 1 ELSE 0 END) as rejected
       FROM submissions s
       WHERE s.deleted_at IS NULL AND s.date >= DATE_SUB(CURDATE(), INTERVAL 11 MONTH)
       GROUP BY DATE_FORMAT(s.date, '%Y-%m')
@@ -330,7 +418,7 @@ export const submissionModel = {
       SELECT DATE_FORMAT(s.date, '%Y') as name, DATE_FORMAT(s.date, '%Y') as sortKey,
         COUNT(*) as submissions,
         SUM(CASE WHEN s.status = 'Approved' THEN 1 ELSE 0 END) as approved,
-        SUM(CASE WHEN s.status = 'Rejected' THEN 1 ELSE 0 END) as rejected
+        SUM(CASE WHEN s.status IN ('Rejected', 'RejectedByShiftLeader', 'RejectedByAdmin') THEN 1 ELSE 0 END) as rejected
       FROM submissions s
       WHERE s.deleted_at IS NULL
       GROUP BY DATE_FORMAT(s.date, '%Y')
@@ -360,7 +448,7 @@ export const submissionModel = {
       SELECT s.operator_name as operatorName, s.operator_ntid as operatorNTID,
         COUNT(*) as totalSubmissions,
         SUM(CASE WHEN s.status = 'Approved' THEN 1 ELSE 0 END) as approvedCount,
-        SUM(CASE WHEN s.status = 'Rejected' THEN 1 ELSE 0 END) as rejectedCount
+        SUM(CASE WHEN s.status IN ('Rejected', 'RejectedByShiftLeader', 'RejectedByAdmin') THEN 1 ELSE 0 END) as rejectedCount
       FROM submissions s
       WHERE s.deleted_at IS NULL
       GROUP BY s.operator_name, s.operator_ntid

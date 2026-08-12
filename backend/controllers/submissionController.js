@@ -129,25 +129,62 @@ export const createSubmission = async (req, res) => {
 export const updateStatus = async (req, res) => {
   try {
     const { id } = req.params;
-    const { status, rejectionRemark = '' } = req.body;
+    const { status: decision, rejectionRemark = '' } = req.body; // decision = the reviewer's intent: Approve or Reject
 
-    if (!['Approved', 'Rejected'].includes(status)) {
+    if (!['Approved', 'Rejected'].includes(decision)) {
       return sendError(res, 'Status must be either Approved or Rejected.', 400);
     }
 
-    if (status === 'Rejected' && !rejectionRemark.trim()) {
+    if (decision === 'Rejected' && !rejectionRemark.trim()) {
       return sendError(res, 'Please provide a rejection remark detailing the corrective action required.', 400);
+    }
+
+    const existing = await submissionModel.getSubmissionById(id);
+    if (!existing) {
+      return sendError(res, 'Submission not found.', 404);
+    }
+
+    const role = req.user ? req.user.role : 'ADMIN';
+    const isShiftLeader = role === 'SHIFT_LEADER';
+    const isAdminLike = role === 'ADMIN' || role === 'SUBADMIN';
+    const reviewerName = req.user ? req.user.name : 'ADMIN';
+
+    // Two-stage workflow: Shift Leader decides on 'Pending' submissions
+    // (Operator -> Shift Leader). Approving there does NOT finalize the
+    // record — it forwards it to Admin as 'PendingAdmin'. Only Admin/Sub
+    // Admin can give the final decision on a 'PendingAdmin' submission.
+    let newStatus;
+    let extra = {};
+
+    if (existing.status === 'Pending') {
+      if (!isShiftLeader && !isAdminLike) {
+        return sendError(res, `Access denied. Role '${role}' cannot review submissions at this stage.`, 403);
+      }
+      newStatus = decision === 'Approved' ? 'PendingAdmin' : 'RejectedByShiftLeader';
+      if (decision === 'Approved') extra.shiftLeaderName = reviewerName;
+    } else if (existing.status === 'PendingAdmin') {
+      if (!isAdminLike) {
+        return sendError(res, 'Only Admin can give the final approval or rejection on a Shift-Leader-approved submission.', 403);
+      }
+      newStatus = decision === 'Approved' ? 'Approved' : 'RejectedByAdmin';
+    } else {
+      return sendError(
+        res,
+        `This submission is already "${existing.status}" and can't be actioned again at this stage. It needs to be edited and resubmitted first.`,
+        409
+      );
     }
 
     // Execute status update & approval history inside an atomic MySQL Transaction
     const updated = await withTransaction(async (dbConnection) => {
       const result = await submissionModel.updateStatus(
         id,
-        status,
+        newStatus,
         rejectionRemark,
-        req.user ? req.user.name : 'ADMIN',
+        reviewerName,
         req.user ? req.user.id : 'usr-admin',
-        dbConnection
+        dbConnection,
+        extra
       );
 
       if (!result) {
@@ -157,11 +194,11 @@ export const updateStatus = async (req, res) => {
       // Record Audit Log Event
       await auditModel.createLog({
         userId: req.user ? req.user.id : null,
-        userName: req.user ? req.user.name : 'ADMIN',
-        userRole: req.user ? req.user.role : 'ADMIN',
-        action: status === 'Approved' ? 'APPROVE_SUBMISSION' : 'REJECT_SUBMISSION',
+        userName: reviewerName,
+        userRole: role,
+        action: newStatus.includes('Rejected') ? 'REJECT_SUBMISSION' : 'APPROVE_SUBMISSION',
         resource: 'SUBMISSIONS',
-        details: { submissionId: id, status, rejectionRemark },
+        details: { submissionId: id, previousStatus: existing.status, newStatus, rejectionRemark },
         ipAddress: req.ip,
         dbConnection
       });
@@ -169,31 +206,146 @@ export const updateStatus = async (req, res) => {
       return result;
     });
 
-    // Notify operator after successful commit
+    // Notify the right person after successful commit:
+    // - Shift Leader approved -> forwarded to Admin, no operator notification yet.
+    // - Shift Leader rejected -> notify the Operator to edit & resubmit.
+    // - Admin approved -> final, notify the Operator it's fully approved.
+    // - Admin rejected -> bounces back to Shift Leader(s), not the operator.
     try {
-      await notificationModel.createNotification({
-        userId: updated.userId,
-        title: status === 'Approved' ? 'Checklist Approved' : 'Checklist Rejected',
-        message: status === 'Approved'
-          ? `Your submission ${updated.templateTitle} (${updated.shift}) was approved.`
-          : `Your submission ${updated.templateTitle} was rejected: ${rejectionRemark}`,
-        type: status === 'Approved' ? 'SUCCESS' : 'WARNING',
-        createdBy: req.user ? req.user.name : 'ADMIN'
-      });
+      if (newStatus === 'RejectedByShiftLeader') {
+        await notificationModel.createNotification({
+          userId: updated.userId,
+          title: 'Checklist Rejected by Shift Leader',
+          message: `Your submission ${updated.templateTitle} (${updated.shift}) was rejected: ${rejectionRemark}. Please edit and resubmit.`,
+          type: 'WARNING',
+          createdBy: reviewerName
+        });
+      } else if (newStatus === 'Approved') {
+        await notificationModel.createNotification({
+          userId: updated.userId,
+          title: 'Checklist Approved',
+          message: `Your submission ${updated.templateTitle} (${updated.shift}) was approved by Admin.`,
+          type: 'SUCCESS',
+          createdBy: reviewerName
+        });
+      }
+      // RejectedByAdmin and PendingAdmin don't notify the operator directly —
+      // they stay inside the Admin/Shift-Leader review loop.
     } catch (notifErr) {
       logger.warn('Notification create skipped:', notifErr.message);
     }
 
-    logger.info(`Submission ${id} status updated to '${status}' by ${req.user ? req.user.name : 'ADMIN'}`);
+    logger.info(`Submission ${id} status updated from '${existing.status}' to '${newStatus}' by ${reviewerName} (${role})`);
 
     const allSubsResult = await submissionModel.getSubmissions({ page: 1, limit: 100 });
-    return sendSuccess(res, allSubsResult.submissions, `Submission ${status.toLowerCase()} successfully`);
+    return sendSuccess(res, allSubsResult.submissions, `Submission moved to '${newStatus}' successfully`);
   } catch (error) {
     if (error.statusCode === 404) {
       return sendError(res, 'Submission not found.', 404);
     }
     logger.error('Error updating submission status:', error);
     return sendError(res, 'Failed to update submission status.', 500, error);
+  }
+};
+
+export const resubmitToAdmin = async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const existing = await submissionModel.getSubmissionById(id);
+    if (!existing) {
+      return sendError(res, 'Submission not found.', 404);
+    }
+
+    const role = req.user ? req.user.role : 'SHIFT_LEADER';
+    const isShiftLeader = role === 'SHIFT_LEADER';
+    const isAdminLike = role === 'ADMIN' || role === 'SUBADMIN';
+    if (!isShiftLeader && !isAdminLike) {
+      return sendError(res, `Access denied. Role '${role}' cannot resubmit submissions.`, 403);
+    }
+
+    // Only makes sense on a submission Admin bounced back to the Shift Leader
+    if (existing.status !== 'RejectedByAdmin') {
+      return sendError(res, `Only an Admin-rejected submission can be resubmitted to Admin. Current status: "${existing.status}".`, 409);
+    }
+
+    const reviewerName = req.user ? req.user.name : 'SHIFT_LEADER';
+
+    const updated = await withTransaction(async (dbConnection) => {
+      const result = await submissionModel.resubmitToAdmin(
+        id,
+        reviewerName,
+        req.user ? req.user.id : 'usr-shiftleader',
+        dbConnection
+      );
+
+      if (!result) {
+        throw Object.assign(new Error('Submission not found.'), { statusCode: 404 });
+      }
+
+      await auditModel.createLog({
+        userId: req.user ? req.user.id : null,
+        userName: reviewerName,
+        userRole: role,
+        action: 'RESUBMIT_SUBMISSION',
+        resource: 'SUBMISSIONS',
+        details: { submissionId: id, newStatus: 'PendingAdmin' },
+        ipAddress: req.ip,
+        dbConnection
+      });
+
+      return result;
+    });
+
+    logger.info(`Submission ${id} edited & resubmitted to Admin by ${reviewerName} (${role})`);
+
+    const allSubsResult = await submissionModel.getSubmissions({ page: 1, limit: 100 });
+    return sendSuccess(res, allSubsResult.submissions, 'Submission resubmitted to Admin for review.');
+  } catch (error) {
+    if (error.statusCode === 404) {
+      return sendError(res, 'Submission not found.', 404);
+    }
+    logger.error('Error resubmitting submission to admin:', error);
+    return sendError(res, 'Failed to resubmit submission.', 500, error);
+  }
+};
+
+export const updateChecks = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { checks, proofPhotos = {} } = req.body;
+
+    if (!checks || typeof checks !== 'object') {
+      return sendError(res, 'Checks payload is required.', 400);
+    }
+
+    const existing = await submissionModel.getSubmissionById(id);
+    if (!existing) {
+      return sendError(res, 'Submission not found.', 404);
+    }
+
+    const role = req.user ? req.user.role : 'SHIFT_LEADER';
+    const isShiftLeader = role === 'SHIFT_LEADER';
+    const isAdminLike = role === 'ADMIN' || role === 'SUBADMIN';
+    if (!isShiftLeader && !isAdminLike) {
+      return sendError(res, `Access denied. Role '${role}' cannot edit submission answers.`, 403);
+    }
+
+    // Editing is only allowed while it's actionable at the Shift Leader's
+    // stage — awaiting their first review, or bounced back by Admin.
+    if (!['Pending', 'RejectedByAdmin'].includes(existing.status)) {
+      return sendError(res, `This submission can't be edited while it's "${existing.status}".`, 409);
+    }
+
+    const reviewerName = req.user ? req.user.name : 'SHIFT_LEADER';
+    const updated = await submissionModel.updateChecks(id, checks, proofPhotos, reviewerName);
+
+    logger.info(`Submission ${id} checklist answers edited by ${reviewerName} (${role})`);
+
+    return sendSuccess(res, updated, 'Checklist answers updated successfully.');
+  } catch (error) {
+    logger.error('Error updating submission checks:', error);
+    return sendError(res, 'Failed to update checklist answers.', 500, error);
   }
 };
 

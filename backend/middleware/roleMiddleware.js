@@ -24,5 +24,18 @@ export const requireRole = (allowedRoles = []) => {
   };
 };
 
+// Main Admin only — Settings page & user account management. Sub Admins
+// intentionally do NOT get this, per "sees everything except Settings".
 export const requireAdmin = requireRole(['ADMIN']);
-export const requireOperator = requireRole(['OPERATOR', 'ADMIN']);
+
+// Full day-to-day operational access (Templates, Approvals, Records,
+// Dashboard) — Main Admin and Sub Admin both qualify, Sub Admin just can't
+// reach Settings/user management (enforced separately by requireAdmin above).
+export const requireAdminOrSubAdmin = requireRole(['ADMIN', 'SUBADMIN']);
+
+// Stage-1 approval queue (Shift Leader review) — Admin/Sub Admin can also
+// act here as an oversight capability, but the controller still enforces
+// which stage each role is allowed to decide on.
+export const requireApprovalStageRole = requireRole(['SHIFT_LEADER', 'ADMIN', 'SUBADMIN']);
+
+export const requireOperator = requireRole(['OPERATOR', 'ADMIN', 'SUBADMIN']);

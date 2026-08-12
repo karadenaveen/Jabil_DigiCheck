@@ -38,6 +38,10 @@ export const validateCreateUser = [
     .trim()
     .notEmpty()
     .withMessage('Numeric NTID is required.'),
+  body('role')
+    .optional()
+    .isIn(['OPERATOR', 'SHIFT_LEADER', 'SUBADMIN'])
+    .withMessage('Role must be one of Operator, Shift Leader, or Sub Admin.'),
   handleValidationErrors
 ];
 

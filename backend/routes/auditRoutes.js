@@ -7,12 +7,12 @@
 import express from 'express';
 import { getAuditLogs } from '../controllers/auditController.js';
 import { authenticateToken } from '../middleware/authMiddleware.js';
-import { requireAdmin } from '../middleware/roleMiddleware.js';
+import { requireAdminOrSubAdmin } from '../middleware/roleMiddleware.js';
 
 const router = express.Router();
 
 router.use(authenticateToken);
-router.use(requireAdmin);
+router.use(requireAdminOrSubAdmin);
 
 router.get('/', getAuditLogs);
 

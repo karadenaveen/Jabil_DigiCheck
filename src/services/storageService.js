@@ -201,6 +201,30 @@ export const storageService = {
     }
   },
 
+  // Shift Leader edits & resends an Admin-rejected submission back to Admin.
+  resubmitSubmissionToAdmin: async (id) => {
+    try {
+      const res = await api.patch(`/submissions/${id}/resubmit-to-admin`);
+      return res.data.data || [];
+    } catch (error) {
+      console.error('Error resubmitting submission to admin via API:', error);
+      throw error;
+    }
+  },
+
+  // Shift Leader edits row check marks (V/X per station) and proof photos
+  // while reviewing, through the same full checklist edit form the
+  // Operator uses.
+  updateSubmissionChecks: async (id, checks, proofPhotos = {}) => {
+    try {
+      const res = await api.patch(`/submissions/${id}/checks`, { checks, proofPhotos });
+      return res.data.data;
+    } catch (error) {
+      console.error('Error updating submission checks via API:', error);
+      throw error;
+    }
+  },
+
   // Real-Time Dashboard Stats API
   getDashboardStats: async () => {
     try {

@@ -1,10 +1,8 @@
--- ====================================================================
--- JABIL DIGICHECK PLANT EXECUTION PLATFORM - MYSQL SCHEMATICS
--- Generated SQL Create Table Statements & Relationships
--- Supports Audit Logs, Soft Delete, Audit Metadata Columns,
--- Database Normalization, and Historical Quality Tracking.
--- ====================================================================
 
+
+-----------------------------------------
+-- Data Base schema Jabil Naveenkumar
+-----------------------------------------
 CREATE DATABASE IF NOT EXISTS `jabil_digicheck` DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 USE `jabil_digicheck`;
 
@@ -37,7 +35,7 @@ CREATE TABLE `users` (
   `username` VARCHAR(100) NOT NULL UNIQUE,
   `ntid` VARCHAR(50) NOT NULL UNIQUE,
   `password` VARCHAR(255) NOT NULL,
-  `role` ENUM('ADMIN', 'OPERATOR') NOT NULL DEFAULT 'OPERATOR',
+  `role` ENUM('ADMIN', 'SUBADMIN', 'SHIFT_LEADER', 'OPERATOR') NOT NULL DEFAULT 'OPERATOR',
   `status` ENUM('ALLOWED', 'DENIED') NOT NULL DEFAULT 'ALLOWED',
   `avatar` VARCHAR(10) DEFAULT 'OP',
 
@@ -137,12 +135,14 @@ CREATE TABLE `submissions` (
   `operator_ntid` VARCHAR(50) NOT NULL,
   `submitted_at` VARCHAR(100) NOT NULL,
   `date` DATE NOT NULL,
-  `status` ENUM('Pending', 'Approved', 'Rejected') DEFAULT 'Pending',
+  `status` ENUM('Pending', 'PendingAdmin', 'Approved', 'Rejected', 'RejectedByShiftLeader', 'RejectedByAdmin') DEFAULT 'Pending',
   `rejection_remark` TEXT DEFAULT NULL,
   `grid_answers` LONGTEXT DEFAULT NULL,
   `filled_excel_path` VARCHAR(255) DEFAULT NULL,
   `reviewed_at` VARCHAR(100) DEFAULT NULL,
   `reviewed_by` VARCHAR(50) DEFAULT NULL,
+  `shift_leader_name` VARCHAR(255) DEFAULT NULL,
+  `shift_leader_reviewed_at` VARCHAR(100) DEFAULT NULL,
   `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   `created_by` VARCHAR(50) DEFAULT 'SYSTEM',
@@ -201,7 +201,7 @@ CREATE TABLE `approval_history` (
   `id` VARCHAR(50) NOT NULL PRIMARY KEY,
   `submission_id` VARCHAR(50) NOT NULL,
   `reviewer_id` VARCHAR(50) NOT NULL,
-  `action` ENUM('APPROVED', 'REJECTED') NOT NULL,
+  `action` ENUM('APPROVED', 'REJECTED', 'RESUBMITTED') NOT NULL,
   `remark` TEXT DEFAULT NULL,
   `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
@@ -276,12 +276,14 @@ SET FOREIGN_KEY_CHECKS = 1;
 
 -- Insert Default Roles
 INSERT INTO `roles` (`id`, `name`, `description`) VALUES
-('role-admin', 'ADMIN', 'System Administrator with full access to blueprints, user access controls, and QA approvals.'),
+('role-admin', 'ADMIN', 'Main System Administrator — the only role that can access Settings and create Operator, Shift Leader, and Sub Admin accounts.'),
+('role-subadmin', 'SUBADMIN', 'Sub Administrator with the same day-to-day access as Admin (Dashboard, Templates, Approvals, Records), except Settings & user account management.'),
+('role-shiftleader', 'SHIFT_LEADER', 'Shift Leader who reviews operator checklist submissions first, can edit them, and approves them forward to Admin for final sign-off.'),
 ('role-operator', 'OPERATOR', 'Plant Line Operator allowed to access assigned shifts and submit digital checklists.');
 
 
 -- --------------------------------------------------------------------
--- Table 13: PASSWORD RESET LOGS (Password Recovery Audit Trail)
+--Table 13: PASSWORD RESET LOGS (Password Recovery Audit Trail)
 -- --------------------------------------------------------------------
 DROP TABLE IF EXISTS `password_reset_logs`;
 
@@ -303,7 +305,3 @@ CREATE TABLE `password_reset_logs` (
 
 
 
--- Note: User passwords below will be hashed automatically by the Express backend auto-seeder if not initialized.
--- Default bcrypt passwords:
--- admin / admin123 -> $2a$10$wO8yOqXn...
--- operator / operator123 -> $2a$10$eE58Y.m...

@@ -1,6 +1,26 @@
 import React, { useState, useEffect } from 'react';
 import { storageService } from '../../services/storageService';
-import { Settings as IconSettings, UserPlus, ShieldAlert, CheckCircle, Ban, Key, UserCheck, Search } from 'lucide-react';
+import { Settings as IconSettings, UserPlus, ShieldAlert, CheckCircle, Ban, Key, UserCheck, Search, Crown } from 'lucide-react';
+
+const ROLE_OPTIONS = [
+  { value: 'OPERATOR', label: 'Operator' },
+  { value: 'SHIFT_LEADER', label: 'Shift Leader' },
+  { value: 'SUBADMIN', label: 'Sub Admin' },
+];
+
+const ROLE_BADGE_CLASS = {
+  ADMIN: 'bg-indigo-100 text-indigo-700',
+  SUBADMIN: 'bg-purple-100 text-purple-700',
+  SHIFT_LEADER: 'bg-amber-100 text-amber-700',
+  OPERATOR: 'bg-sky-100 text-sky-700',
+};
+
+const ROLE_LABEL = {
+  ADMIN: 'ADMIN (Main)',
+  SUBADMIN: 'SUB ADMIN',
+  SHIFT_LEADER: 'SHIFT LEADER',
+  OPERATOR: 'OPERATOR',
+};
 
 export function SettingsPage() {
   const [users, setUsers] = useState([]);
@@ -71,10 +91,10 @@ export function SettingsPage() {
         <div>
           <h1 className="text-xl font-bold text-slate-900 tracking-tight flex items-center gap-2">
             <IconSettings className="w-6 h-6 text-[#00529B]" />
-            <span>System Settings & NTID Access Control</span>
+            <span>System Settings & User Account Control</span>
           </h1>
           <p className="text-xs text-slate-500 mt-0.5">
-            Manage system operators, set login passwords, and grant or deny NTID access permissions.
+            Main Admin only: create Operator, Shift Leader, and Sub Admin accounts, set login passwords, and grant or deny access.
           </p>
         </div>
 
@@ -83,7 +103,7 @@ export function SettingsPage() {
           className="px-5 py-2.5 bg-[#00529B] hover:bg-blue-800 text-white font-bold text-xs rounded-xl shadow transition flex items-center gap-2"
         >
           <UserPlus className="w-4 h-4" />
-          <span>Add New Operator / NTID</span>
+          <span>Add New User Account</span>
         </button>
       </div>
 
@@ -133,7 +153,10 @@ export function SettingsPage() {
                         {u.avatar || 'OP'}
                       </div>
                       <div>
-                        <div>{u.name}</div>
+                        <div className="flex items-center gap-1.5">
+                          <span>{u.name}</span>
+                          {u.role === 'ADMIN' && <Crown className="w-3.5 h-3.5 text-amber-500" title="Main Admin" />}
+                        </div>
                         <div className="text-[10px] font-normal text-slate-400">Created: {u.createdDate}</div>
                       </div>
                     </td>
@@ -144,9 +167,9 @@ export function SettingsPage() {
                     
                     <td className="px-4 py-3">
                       <span className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider ${
-                        u.role === 'ADMIN' ? 'bg-indigo-100 text-indigo-700' : 'bg-sky-100 text-sky-700'
+                        ROLE_BADGE_CLASS[u.role] || 'bg-sky-100 text-sky-700'
                       }`}>
-                        {u.role}
+                        {ROLE_LABEL[u.role] || u.role}
                       </span>
                     </td>
 
@@ -201,7 +224,7 @@ export function SettingsPage() {
             
             <div className="flex items-center gap-2 text-slate-900 font-bold text-base">
               <UserPlus className="w-5 h-5 text-[#00529B]" />
-              <span>Create New Operator / NTID</span>
+              <span>Create New User Account</span>
             </div>
 
             <form onSubmit={handleAddOperator} className="space-y-4 text-xs">
@@ -238,6 +261,26 @@ export function SettingsPage() {
                   placeholder="ramesh.p"
                   className="w-full p-2.5 bg-slate-50 border border-slate-300 rounded-xl"
                 />
+              </div>
+
+              <div>
+                <label className="block font-bold text-slate-700 uppercase mb-1">Account Role</label>
+                <div className="grid grid-cols-3 gap-2">
+                  {ROLE_OPTIONS.map((opt) => (
+                    <button
+                      type="button"
+                      key={opt.value}
+                      onClick={() => setNewUser({ ...newUser, role: opt.value })}
+                      className={`py-2 rounded-xl text-[11px] font-bold border transition ${
+                        newUser.role === opt.value
+                          ? 'bg-[#00529B] text-white border-[#00529B] shadow-sm'
+                          : 'bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100'
+                      }`}
+                    >
+                      {opt.label}
+                    </button>
+                  ))}
+                </div>
               </div>
 
               <div>

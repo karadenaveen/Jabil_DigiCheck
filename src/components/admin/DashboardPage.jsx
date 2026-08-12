@@ -41,7 +41,19 @@ const COLORS = {
 const STATUS_META = {
   Approved: { color: COLORS.approved, bg: 'bg-emerald-100', text: 'text-emerald-700', dot: 'bg-emerald-500' },
   Pending: { color: COLORS.pending, bg: 'bg-amber-100', text: 'text-amber-700', dot: 'bg-amber-500' },
-  Rejected: { color: COLORS.rejected, bg: 'bg-rose-100', text: 'text-rose-700', dot: 'bg-rose-500' }
+  PendingAdmin: { color: '#0ea5e9', bg: 'bg-sky-100', text: 'text-sky-700', dot: 'bg-sky-500' },
+  Rejected: { color: COLORS.rejected, bg: 'bg-rose-100', text: 'text-rose-700', dot: 'bg-rose-500' },
+  RejectedByShiftLeader: { color: COLORS.rejected, bg: 'bg-rose-100', text: 'text-rose-700', dot: 'bg-rose-500' },
+  RejectedByAdmin: { color: '#f97316', bg: 'bg-orange-100', text: 'text-orange-700', dot: 'bg-orange-500' }
+};
+
+const STATUS_DISPLAY_LABEL = {
+  Pending: 'Pending (Shift Leader)',
+  PendingAdmin: 'Pending (Admin)',
+  Approved: 'Approved',
+  RejectedByShiftLeader: 'Rejected (Shift Leader)',
+  RejectedByAdmin: 'Rejected (Admin)',
+  Rejected: 'Rejected'
 };
 
 const TREND_FILTERS = ['Day', 'Week', 'Month', 'Year'];
@@ -97,6 +109,17 @@ function getBucketKey(dateStr, filter) {
   if (filter === 'Month') return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
   return `${d.getFullYear()}`;
 }
+
+function normalizeStatus(status) {
+  const value = String(status || '').trim().toLowerCase();
+
+  if (value === 'approved') return 'Approved';
+  if (value === 'pending') return 'Pending';
+  if (value === 'rejected') return 'Rejected';
+
+  return null;
+}
+
 
 function getBucketLabel(key, filter) {
   if (filter === 'Day') {
@@ -301,7 +324,9 @@ export function DashboardPage() {
       }
       const b = buckets.get(key);
       b.submissions += 1;
-      if (b[s.status] !== undefined) b[s.status] += 1;
+      if (b[s.status] !== undefined) {
+  b[s.status] += 1;
+}
     });
 
     return Array.from(buckets.values())
@@ -365,6 +390,12 @@ export function DashboardPage() {
 
   const drilldownRecords = useMemo(() => {
     if (drillStatus === 'All') return [];
+    if (drillStatus === 'Pending') {
+      return submissions.filter((s) => s.status === 'Pending' || s.status === 'PendingAdmin').slice(0, 8);
+    }
+    if (drillStatus === 'Rejected') {
+      return submissions.filter((s) => ['Rejected', 'RejectedByShiftLeader', 'RejectedByAdmin'].includes(s.status)).slice(0, 8);
+    }
     return submissions.filter((s) => s.status === drillStatus).slice(0, 8);
   }, [submissions, drillStatus]);
 
@@ -507,7 +538,7 @@ export function DashboardPage() {
                           <td className="py-2.5 pr-4 text-slate-500">{r.date}</td>
                           <td className="py-2.5 pr-0 text-right">
                             <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${STATUS_META[r.status]?.bg} ${STATUS_META[r.status]?.text}`}>
-                              {r.status}
+                              {STATUS_DISPLAY_LABEL[r.status] || r.status}
                             </span>
                           </td>
                         </tr>
@@ -575,7 +606,7 @@ export function DashboardPage() {
                     <Line type="monotone" dataKey="submissions" name="Total" stroke={COLORS.primary} strokeWidth={2.5} dot={false} />
                     <Line type="monotone" dataKey="Approved" stroke={COLORS.approved} strokeWidth={2} dot={false} />
                     <Line type="monotone" dataKey="Pending" stroke={COLORS.pending} strokeWidth={2} dot={false} />
-                    <Line type="monotone" dataKey="Rejected" stroke={COLORS.rejected} strokeWidth={2} dot={false} />
+                    <Line type="monotone" dataKey="Rejected" name="Rejected" stroke={COLORS.rejected} strokeWidth={3} dot={{ r: 4, fill: COLORS.rejected, strokeWidth: 0 }} activeDot={{ r: 6, fill: COLORS.rejected }} connectNulls />
                   </LineChart>
                 ) : chartType === 'bar' ? (
                   <BarChart data={trendData} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
@@ -611,7 +642,7 @@ export function DashboardPage() {
                     <Legend wrapperStyle={{ fontSize: 11 }} />
                     <Area type="monotone" dataKey="Approved" stackId="a" stroke={COLORS.approved} fill="url(#colorApproved)" strokeWidth={2} />
                     <Area type="monotone" dataKey="Pending" stackId="a" stroke={COLORS.pending} fill="url(#colorPending)" strokeWidth={2} />
-                    <Area type="monotone" dataKey="Rejected" stackId="a" stroke={COLORS.rejected} fill="url(#colorRejected)" strokeWidth={2} />
+                    <Area type="monotone" dataKey="Rejected" stackId="a" stroke={COLORS.rejected} fill="url(#colorRejected)" strokeWidth={3} dot={{ r: 3, fill: COLORS.rejected }} activeDot={{ r: 6, fill: COLORS.rejected }} connectNulls />
                     <Line type="monotone" dataKey="submissions" name="Total" stroke={COLORS.primary} strokeWidth={2.5} dot={{ r: 3 }} />
                   </ComposedChart>
                 )}

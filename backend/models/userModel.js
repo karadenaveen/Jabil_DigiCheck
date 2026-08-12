@@ -69,7 +69,13 @@ export const userModel = {
   createUser: async ({ name, username, ntid, password, role = 'OPERATOR', avatar, createdBy = 'ADMIN' }, dbConnection = null) => {
     const executor = dbConnection || pool;
     const id = `usr-${Date.now()}`;
-    const roleId = role === 'ADMIN' ? 'role-admin' : 'role-operator';
+    const ROLE_ID_MAP = {
+      ADMIN: 'role-admin',
+      SUBADMIN: 'role-subadmin',
+      SHIFT_LEADER: 'role-shiftleader',
+      OPERATOR: 'role-operator'
+    };
+    const roleId = ROLE_ID_MAP[role] || 'role-operator';
     const userAvatar = avatar || (name ? name.substring(0, 2).toUpperCase() : 'OP');
 
     const sql = `

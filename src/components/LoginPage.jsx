@@ -1,8 +1,9 @@
-import React, { useState, useMemo, useCallback } from 'react';
+import React, { useState, useMemo, useCallback, useEffect } from 'react';
 import { motion, AnimatePresence, MotionConfig, useMotionValue, useSpring, useTransform } from 'framer-motion';
 import { storageService } from '../services/storageService';
-import { ShieldCheck, Lock, User, AlertCircle, ArrowRight, Eye, EyeOff, Cpu, Activity, LifeBuoy, FileText } from 'lucide-react';
+import { ShieldCheck, Lock, User, ArrowRight, Eye, EyeOff, Cpu, Activity, LifeBuoy, FileText } from 'lucide-react';
 import loginBg from '../assets/login-bg.jpg';
+import companyLogo from '../assets/logo.png';
 
 /* ---------------------------------------------------------------------- */
 /* Animation variants — kept outside the component so they are created    */
@@ -61,6 +62,127 @@ function useParticles(count) {
   );
 }
 
+/* Small robot-face assistant — styled after the "Robot Login Form"        */
+/* reference: ear tabs on a rounded head, a dark screen with 4 status LED  */
+/* dots, a live status label, and a simple mouth glyph. On an auth error,  */
+/* it switches to a sad/warning face (shake + red pulsing screen) instead  */
+/* of a plain text banner; a happy face shows once the password looks     */
+/* strong. Kept intentionally compact/small.                              */
+function RobotFace({ password, error }) {
+  const status = useMemo(() => {
+    if (error) return { label: 'OOPS!', lit: 4, color: '#ef4444', mouth: '⌢' };
+    const len = password.length;
+    if (len === 0) return { label: 'WAITING', lit: 0, color: '#64748b', mouth: '−' };
+    if (len < 4) return { label: 'TOO SHORT', lit: 1, color: '#ef4444', mouth: '⌢' };
+    if (len < 8) return { label: 'WEAK', lit: 2, color: '#f59e0b', mouth: '−' };
+    if (len < 12) return { label: 'OKAY', lit: 3, color: '#38bdf8', mouth: '‿' };
+    return { label: 'STRONG', lit: 4, color: '#34d399', mouth: '‿' };
+  }, [password, error]);
+
+  return (
+    <motion.div
+      key={error ? `error-${error}` : 'idle'}
+      className="relative"
+      animate={
+        error
+          ? { y: [0, -2, 0], x: [0, -7, 7, -5, 5, -3, 3, 0] }
+          : { y: [0, -4, 0] }
+      }
+      transition={
+        error
+          ? { duration: 0.6, ease: 'easeInOut' }
+          : { duration: 2.8, repeat: Infinity, ease: 'easeInOut' }
+      }
+    >
+      {/* ear tabs */}
+      <div className="absolute -left-1.5 top-3 w-2 h-4 rounded-sm bg-white/90 ring-1 ring-white/30" />
+      <div className="absolute -right-1.5 top-3 w-2 h-4 rounded-sm bg-white/90 ring-1 ring-white/30" />
+
+      {/* head */}
+      <div
+        className="w-16 h-12 rounded-2xl bg-gradient-to-b from-slate-100 to-slate-300 shadow-lg flex items-center justify-center p-1.5 transition-all"
+        style={{ boxShadow: error ? '0 0 0 2px #ef4444aa' : undefined }}
+      >
+        {/* screen */}
+        <motion.div
+          className="w-full h-full rounded-lg flex flex-col items-center justify-center gap-0.5"
+          animate={{ backgroundColor: error ? ['#1c2233', '#3a1420', '#1c2233'] : '#1c2233' }}
+          transition={{ duration: 0.8, repeat: error ? Infinity : 0, ease: 'easeInOut' }}
+        >
+          {error ? (
+            <motion.span
+              animate={{ opacity: [1, 0.35, 1] }}
+              transition={{ duration: 0.5, repeat: Infinity, ease: 'easeInOut' }}
+              className="text-[11px] leading-none"
+            >
+              ⚠
+            </motion.span>
+          ) : (
+            <div className="flex gap-1">
+              {[0, 1, 2, 3].map((i) => (
+                <motion.span
+                  key={i}
+                  className="w-1.5 h-1.5 rounded-full"
+                  animate={{
+                    backgroundColor: i < status.lit ? status.color : '#3a4152',
+                    scale: i < status.lit ? [1, 1.25, 1] : 1,
+                  }}
+                  transition={{ duration: 0.4 }}
+                />
+              ))}
+            </div>
+          )}
+          <AnimatePresence mode="wait">
+            <motion.span
+              key={status.label}
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              transition={{ duration: 0.2 }}
+              className="text-[6px] font-extrabold tracking-widest uppercase leading-none"
+              style={{ color: status.color }}
+            >
+              {status.label}
+            </motion.span>
+          </AnimatePresence>
+          <span className="text-[8px] leading-none" style={{ color: status.color }}>
+            {status.mouth}
+          </span>
+        </motion.div>
+      </div>
+    </motion.div>
+  );
+}
+
+/* Picks what the little AI assistant should say, based on form progress. */
+/* Idle messages the robot cycles through automatically (continuously,     */
+/* every ~2.8s) when the form is untouched — starts with the credit line,  */
+/* then moves on to the greeting, looping. Reactive states (typing,        */
+/* loading, error) still take priority over this cycle once they apply.   */
+const IDLE_MESSAGES = ['Developer: Naveen_Karade','Welcome to DigiCheck 👋'];
+
+function useIdleMessageCycle(intervalMs = 2800) {
+  const [index, setIndex] = useState(0);
+  useEffect(() => {
+    const id = setInterval(() => {
+      setIndex((i) => (i + 1) % IDLE_MESSAGES.length);
+    }, intervalMs);
+    return () => clearInterval(id);
+  }, [intervalMs]);
+  return IDLE_MESSAGES[index];
+}
+
+function useBotMessage({ usernameOrNTID, password, error, loading, idleMessage }) {
+  return useMemo(() => {
+    if (loading) return "Hang tight — verifying your credentials...";
+    if (error) return error;
+    if (!usernameOrNTID.trim() && !password.trim()) return idleMessage;
+    if (!usernameOrNTID.trim()) return "Hi! Please enter your NTID or Username to get started.";
+    if (!password.trim()) return "Great! Now enter your password.";
+    return "Looks good — tap Sign In when you're ready!";
+  }, [usernameOrNTID, password, error, loading, idleMessage]);
+}
+
 export function LoginPage({ onLoginSuccess }) {
   const [usernameOrNTID, setUsernameOrNTID] = useState('');
   const [password, setPassword] = useState('');
@@ -82,6 +204,15 @@ export function LoginPage({ onLoginSuccess }) {
   const bgY = useTransform(springY, [-1, 1], ['-2%', '2%']);
   const glowX = useTransform(springX, [-1, 1], ['3%', '-3%']);
   const glowY = useTransform(springY, [-1, 1], ['3%', '-3%']);
+
+  /* Subtle 3D tilt on the login card itself, driven by the same mouse-     */
+  /* tracked springs as the background parallax — a light "premium" feel   */
+  /* without being distracting. Range kept small (a few degrees).          */
+  const cardRotateY = useTransform(springX, [-1, 1], ['-4deg', '4deg']);
+  const cardRotateX = useTransform(springY, [-1, 1], ['3deg', '-3deg']);
+
+  const idleMessage = useIdleMessageCycle(2000);
+  const botMessage = useBotMessage({ usernameOrNTID, password, error, loading, idleMessage });
 
   const handlePointerMove = useCallback((e) => {
     const { innerWidth, innerHeight } = window;
@@ -204,8 +335,13 @@ export function LoginPage({ onLoginSuccess }) {
         className="py-3 px-4 sm:py-4 sm:px-6 flex items-center justify-between z-10 border-b border-white/5 bg-black/20 backdrop-blur-md shrink-0"
       >
         <div className="flex items-center gap-2 sm:gap-3">
-          <div className="bg-white px-2.5 py-1 sm:px-3 sm:py-1.5 rounded font-black text-jabil-blue text-base sm:text-xl tracking-tighter shadow-md">
-            JABIL
+          {/* Company logo image (was a "JABIL" text pill) */}
+          <div className="bg-white px-2.5 py-1 sm:px-3 sm:py-1.5 rounded shadow-md flex items-center">
+            <img
+              src={companyLogo}
+              alt="Company logo"
+              className="h-5 sm:h-6 w-auto object-contain"
+            />
           </div>
           <div className="flex items-center gap-1.5 text-sm sm:text-lg font-semibold text-slate-200">
             <ShieldCheck className="w-4 h-4 sm:w-5 sm:h-5 text-sky-400" />
@@ -213,63 +349,55 @@ export function LoginPage({ onLoginSuccess }) {
           </div>
         </div>
         <div className="hidden md:block text-xs font-mono text-slate-400 bg-white/5 px-3 py-1 rounded-full border border-white/10">
-          Industrial Quality Checklist Engine v2.4
+          Industrial Quality Checklists
         </div>
       </motion.div>
 
       {/* Main Login Card */}
       <div className="flex-1 flex items-center justify-center px-4 py-4 sm:py-6 z-10">
         <motion.div
-          className="w-full max-w-sm sm:max-w-md"
+          className="w-full max-w-xs sm:max-w-sm"
           variants={cardContainerVariants}
           initial="hidden"
           animate="visible"
+          style={{ perspective: 1000 }}
         >
           <motion.div
             className="relative rounded-3xl p-[1px] bg-gradient-to-b from-white/20 via-white/5 to-transparent shadow-2xl shadow-black/40"
+            style={{ rotateX: cardRotateX, rotateY: cardRotateY, transformStyle: 'preserve-3d' }}
             whileHover={{ boxShadow: '0 25px 60px -15px rgba(56,189,248,0.25)' }}
             transition={{ duration: 0.4 }}
           >
-            <div className="rounded-3xl bg-black/35 backdrop-blur-2xl border border-white/10 p-6 sm:p-9">
+            {/* "hands" — shoulder tabs where the robot's arms attach to the box */}
+            <div className="absolute -left-2 top-9 w-3 h-9 rounded-md bg-white/10 border border-white/20 z-10" />
+            <div className="absolute -right-2 top-9 w-3 h-9 rounded-md bg-white/10 border border-white/20 z-10" />
+            {/* "legs" — feet tabs where the robot's legs attach below the box */}
+            <div className="absolute -bottom-2.5 left-8 w-8 h-4 rounded-md bg-white/10 border border-white/20 z-10" />
+            <div className="absolute -bottom-2.5 right-8 w-8 h-4 rounded-md bg-white/10 border border-white/20 z-10" />
+
+            <div className="rounded-3xl bg-black/35 backdrop-blur-2xl border border-white/10 p-5 sm:p-7">
 
               {/* Brand Heading */}
               <motion.div variants={itemVariants} className="text-center mb-5 sm:mb-7">
-                <motion.div
-                  variants={logoVariants}
-                  className="inline-flex items-center justify-center w-11 h-11 sm:w-14 sm:h-14 rounded-2xl bg-gradient-to-tr from-sky-500 to-jabil-blue mb-2.5 sm:mb-4 shadow-lg shadow-sky-500/30 ring-1 ring-white/20"
-                >
-                  <ShieldCheck className="w-6 h-6 sm:w-7 sm:h-7 text-white" />
+                <motion.div variants={logoVariants} className="flex flex-col items-center mb-2.5 sm:mb-4">
+                  <RobotFace password={password} error={error} />
+                  <div className="relative mt-2 max-w-[230px] bg-black/60 backdrop-blur-md border border-white/15 rounded-2xl px-3 py-2 shadow-xl">
+                    <span className="absolute -top-1.5 left-1/2 -translate-x-1/2 w-3 h-3 bg-black/60 border-l border-t border-white/15 rotate-45" />
+                    <AnimatePresence mode="wait">
+                      <motion.p
+                        key={botMessage}
+                        initial={{ opacity: 0, y: 6 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        exit={{ opacity: 0, y: -6 }}
+                        transition={{ duration: 0.3 }}
+                        className="text-[11px] sm:text-xs text-slate-200 text-center leading-snug"
+                      >
+                        {botMessage}
+                      </motion.p>
+                    </AnimatePresence>
+                  </div>
                 </motion.div>
-                <h1 className="text-xl sm:text-2xl font-bold text-white tracking-tight">Welcome back</h1>
-                <p className="text-xs sm:text-sm text-slate-400 mt-1 sm:mt-1.5">
-                  Sign in with your NTID or Username to access DigiCheck
-                </p>
               </motion.div>
-
-              {/* Error Banner */}
-              <AnimatePresence mode="wait">
-                {error && (
-                  <motion.div
-                    key={error}
-                    initial={{ opacity: 0, y: -10, scale: 0.97 }}
-                    animate={{
-                      opacity: 1,
-                      y: 0,
-                      scale: 1,
-                      x: [0, -6, 5, -3, 2, 0],
-                    }}
-                    exit={{ opacity: 0, y: -8, scale: 0.97, transition: { duration: 0.2 } }}
-                    transition={{ duration: 0.45, ease: [0.16, 1, 0.3, 1] }}
-                    className="mb-6 p-3.5 bg-rose-500/10 border border-rose-500/30 rounded-xl text-rose-300 text-sm flex items-start gap-3"
-                  >
-                    <AlertCircle className="w-5 h-5 text-rose-400 shrink-0 mt-0.5" />
-                    <div>
-                      <p className="font-semibold text-rose-200">Authentication Notice</p>
-                      <p className="text-xs text-rose-300/90 mt-0.5">{error}</p>
-                    </div>
-                  </motion.div>
-                )}
-              </AnimatePresence>
 
               {/* Form */}
               <form onSubmit={handleSubmit} className="space-y-4 sm:space-y-5" noValidate>
@@ -358,7 +486,7 @@ export function LoginPage({ onLoginSuccess }) {
                   whileHover={{ scale: loading ? 1 : 1.015 }}
                   whileTap={{ scale: loading ? 1 : 0.98 }}
                   transition={{ duration: 0.18 }}
-                  className="relative overflow-hidden w-full py-3 px-4 bg-gradient-to-r from-sky-500 to-jabil-blue hover:from-sky-400 hover:to-blue-600 text-white font-semibold rounded-xl shadow-lg shadow-sky-500/25 transition-colors duration-200 flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed focus:outline-none focus-visible:ring-2 focus-visible:ring-sky-400 focus-visible:ring-offset-2 focus-visible:ring-offset-[#050b16]"
+                  className="relative overflow-hidden block w-auto mx-auto px-6 py-2 text-sm bg-gradient-to-r from-sky-500 to-jabil-blue hover:from-sky-400 hover:to-blue-600 text-white font-semibold rounded-xl shadow-lg shadow-sky-500/25 transition-colors duration-200 flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed focus:outline-none focus-visible:ring-2 focus-visible:ring-sky-400 focus-visible:ring-offset-2 focus-visible:ring-offset-[#050b16]"
                 >
                   {/* Ripple layer */}
                   {ripples.map((r) => (
@@ -401,7 +529,7 @@ export function LoginPage({ onLoginSuccess }) {
                   </AnimatePresence>
                 </motion.button>
               </form>
-
+{/*
               <motion.div
                 variants={itemVariants}
                 className="mt-4 sm:mt-6 pt-3 sm:pt-4 border-t border-white/10 flex flex-wrap items-center justify-center gap-1.5 sm:gap-2"
@@ -419,6 +547,7 @@ export function LoginPage({ onLoginSuccess }) {
                   Plant-Grade Security
                 </span>
               </motion.div>
+*/}
             </div>
           </motion.div>
         </motion.div>

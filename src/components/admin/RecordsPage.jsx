@@ -1,20 +1,71 @@
 import React, { useState, useEffect } from 'react';
 import { storageService } from '../../services/storageService';
-import { Database, Search, Download, Printer, Filter, FileText, CheckCircle, XCircle } from 'lucide-react';
+import { SubmissionGridReview } from './SubmissionGridReview';
+import { sortByLastActivityDesc, buildActivityTimeline } from '../../utils/submissionTimeline';
+import { Database, Search, Download, Printer, Filter, FileText, CheckCircle, XCircle, Grid3x3, AlertTriangle } from 'lucide-react';
 
 export function RecordsPage() {
   const [submissions, setSubmissions] = useState([]);
+  const [templates, setTemplates] = useState([]);
   const [searchQuery, setSearchQuery] = useState('');
   const [activeTab, setActiveTab] = useState('All'); // All, Approved, Rejected, Pending
 
+  // Original filled Excel sheet viewer (same as Approvals page)
+  const [reviewSub, setReviewSub] = useState(null);
+  const [gridReviewOpen, setGridReviewOpen] = useState(false);
+  const [noGridNotice, setNoGridNotice] = useState(null);
+
   useEffect(() => {
     fetchSubmissions();
+    fetchTemplates();
   }, []);
+
+  const fetchTemplates = async () => {
+    const data = await storageService.getTemplates();
+    setTemplates(data);
+  };
 
   const fetchSubmissions = async () => {
     const data = await storageService.getSubmissions();
-    setSubmissions(data);
+    // LIFO — whichever submission was most recently submitted, forwarded,
+    // or decided on (by anyone, at any stage) shows first.
+    setSubmissions(sortByLastActivityDesc(data));
   };
+
+  // Opens the exact original Excel sheet with the operator's filled-in
+  // answers overlaid, same view used on the Approvals page. Falls back to
+  // a short explanation if the template no longer has its saved grid data.
+  const handleViewOriginalSheet = (sub) => {
+    const matchedTemplate = templates.find(t => t.id === sub.templateId);
+    const hasExactGrid = matchedTemplate?.gridData && sub.gridAnswers;
+
+    if (!hasExactGrid) {
+      setNoGridNotice(sub);
+      setTimeout(() => setNoGridNotice(null), 4000);
+      return;
+    }
+
+    setReviewSub(sub);
+    setGridReviewOpen(true);
+  };
+
+  // 'Pending' tab covers both approval stages; 'Rejected' tab covers a
+  // rejection from either the Shift Leader or Admin stage (plus legacy data).
+  const matchesStatusTab = (status, tab) => {
+    if (tab === 'All') return true;
+    if (tab === 'Pending') return status === 'Pending' || status === 'PendingAdmin';
+    if (tab === 'Rejected') return ['Rejected', 'RejectedByShiftLeader', 'RejectedByAdmin'].includes(status);
+    return status === tab;
+  };
+
+  const statusLabel = (status) => ({
+    Pending: 'Pending (Shift Leader)',
+    PendingAdmin: 'Pending (Admin)',
+    Approved: 'Approved',
+    RejectedByShiftLeader: 'Rejected (Shift Leader)',
+    RejectedByAdmin: 'Rejected (Admin)',
+    Rejected: 'Rejected'
+  }[status] || status);
 
   const filtered = submissions.filter(sub => {
     const matchesSearch = 
@@ -22,8 +73,7 @@ export function RecordsPage() {
       sub.operatorName.toLowerCase().includes(searchQuery.toLowerCase()) ||
       sub.docNumber.toLowerCase().includes(searchQuery.toLowerCase());
     
-    if (activeTab === 'All') return matchesSearch;
-    return matchesSearch && sub.status === activeTab;
+    return matchesSearch && matchesStatusTab(sub.status, activeTab);
   });
 
   const exportExcel = () => {
@@ -109,9 +159,10 @@ export function RecordsPage() {
                 <th className="px-4 py-3">Doc Number</th>
                 <th className="px-4 py-3">Shift</th>
                 <th className="px-4 py-3">Operator (NTID)</th>
-                <th className="px-4 py-3">Submission Date</th>
+                <th className="px-4 py-3">Activity Timeline (Live Date & Time)</th>
                 <th className="px-4 py-3">Status</th>
                 <th className="px-4 py-3">Remarks / Feedback</th>
+                <th className="px-4 py-3">Original Sheet</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-200">
@@ -128,14 +179,26 @@ export function RecordsPage() {
                   <td className="px-4 py-3 text-slate-700">
                     {r.operatorName} <span className="text-slate-400 font-mono">({r.operatorNTID})</span>
                   </td>
-                  <td className="px-4 py-3 text-slate-500 font-mono">{r.submittedAt}</td>
+                  <td className="px-4 py-3 text-slate-500 font-mono min-w-[200px]">
+                    <div className="space-y-1">
+                      {buildActivityTimeline(r).map((step) => (
+                        <div key={step.key} className="flex items-baseline gap-1.5 text-[10.5px]">
+                          <span className="w-1.5 h-1.5 rounded-full bg-[#00529B] shrink-0" />
+                          <span className="text-slate-600 font-semibold not-italic font-sans">{step.label}:</span>
+                          <span>{step.at}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </td>
                   <td className="px-4 py-3">
                     <span className={`px-2.5 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider ${
                       r.status === 'Approved' ? 'bg-emerald-100 text-emerald-800 border border-emerald-300' :
-                      r.status === 'Rejected' ? 'bg-rose-100 text-rose-800 border border-rose-300' :
+                      r.status === 'PendingAdmin' ? 'bg-sky-100 text-sky-800 border border-sky-300' :
+                      r.status === 'RejectedByAdmin' ? 'bg-orange-100 text-orange-800 border border-orange-300' :
+                      (r.status === 'Rejected' || r.status === 'RejectedByShiftLeader') ? 'bg-rose-100 text-rose-800 border border-rose-300' :
                       'bg-amber-100 text-amber-800 border border-amber-300'
                     }`}>
-                      {r.status}
+                      {statusLabel(r.status)}
                     </span>
                   </td>
                   <td className="px-4 py-3 text-slate-600 italic">
@@ -145,6 +208,21 @@ export function RecordsPage() {
                       'N/A'
                     )}
                   </td>
+                  <td className="px-4 py-3">
+                    <button
+                      onClick={() => handleViewOriginalSheet(r)}
+                      className="flex items-center gap-1.5 text-[11px] font-bold text-white bg-indigo-600 hover:bg-indigo-700 px-3 py-1.5 rounded-lg shadow-sm transition whitespace-nowrap"
+                    >
+                      <Grid3x3 className="w-3.5 h-3.5" />
+                      View Original Sheet
+                    </button>
+                    {noGridNotice?.id === r.id && (
+                      <div className="mt-1.5 flex items-start gap-1.5 text-[10px] text-amber-700 max-w-[220px]">
+                        <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+                        <span>Original sheet unavailable — template's saved grid data is missing.</span>
+                      </div>
+                    )}
+                  </td>
                 </tr>
               ))}
             </tbody>
@@ -152,6 +230,19 @@ export function RecordsPage() {
         </div>
 
       </div>
+
+      {/* Original Excel Sheet Review (exact grid + real filled-in answers) */}
+      {reviewSub && (
+        <SubmissionGridReview
+          isOpen={gridReviewOpen}
+          onClose={() => setGridReviewOpen(false)}
+          workbook={templates.find(t => t.id === reviewSub.templateId)?.gridData}
+          answers={reviewSub.gridAnswers}
+          title={reviewSub.templateTitle}
+          docNumber={reviewSub.docNumber}
+          filledExcelPath={reviewSub.filledExcelPath}
+        />
+      )}
 
     </div>
   );

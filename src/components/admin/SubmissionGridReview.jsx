@@ -1,6 +1,6 @@
 import React, { useState, useMemo } from 'react';
 import { X, FileSpreadsheet, Download, Loader2 } from 'lucide-react';
-import { ROW_HEADER_WIDTH, colLetter, cellStyleToCss, buildMergeMaps, getImageRect } from '../../utils/excelGridHelpers';
+import { ROW_HEADER_WIDTH, colLetter, cellStyleToCss, buildMergeMaps, buildImageLayout } from '../../utils/excelGridHelpers';
 import { buildFilledWorkbookBlob } from '../../utils/excelParser';
 import { getFileUrl } from '../../services/storageService';
 
@@ -11,6 +11,11 @@ export function SubmissionGridReview({ isOpen, onClose, workbook, answers, title
 
   const sheet = workbook?.sheets?.[activeSheetIndex] || null;
   const { mergeStarts, coveredCells } = useMemo(() => buildMergeMaps(sheet), [sheet]);
+  // Image layout: each image spans the cells it anchors over (like a native
+  // Excel merge) instead of floating as a separately-positioned overlay —
+  // keeps images contained inside their own cell/column instead of
+  // drifting over unrelated columns.
+  const imageLayout = useMemo(() => buildImageLayout(sheet), [sheet]);
   const hiddenColSet = useMemo(() => new Set(sheet?.hiddenCols || []), [sheet]);
   const hiddenRowSet = useMemo(() => {
     const s = new Set();
@@ -146,37 +151,93 @@ export function SubmissionGridReview({ isOpen, onClose, workbook, answers, title
                           const colNum = cIdx + 1;
                           if (hiddenColSet.has(colNum)) return null;
                           const key = `${rowMeta.index}_${colNum}`;
-                          if (coveredCells.has(key)) return null;
+                          if (coveredCells.has(key) || imageLayout.covered.has(key)) return null;
 
                           const cellData = sheet.cells[key];
                           const span = mergeStarts[key];
+                          const imageSpan = imageLayout.startMap[key];
                           const isFrozenColCell = colNum <= xSplit;
                           const hasOriginal = cellData && cellData.value !== '' && cellData.value !== undefined;
                           const answerKey = `${activeSheetIndex}_${rowMeta.index}_${colNum}`;
                           const answerValue = answers ? answers[answerKey] : undefined;
+                          const hasAnswer = answerValue !== undefined && answerValue !== '';
+
+                          const effectiveRowSpan = imageSpan ? imageSpan.rowSpan : (span ? span.rowSpan : undefined);
+                          const effectiveColSpan = imageSpan ? imageSpan.colSpan : (span ? span.colSpan : undefined);
 
                           const style = {
-                            height: rowMeta.height,
+                            height: imageSpan ? undefined : rowMeta.height,
                             ...cellStyleToCss(cellData),
                             ...(isFrozenColCell ? { position: 'sticky', left: colOffsets[cIdx], zIndex: 10 } : {})
                           };
 
-                          const isFilledAnswer = !hasOriginal && answerValue;
-                          if (isFilledAnswer) {
+                          const isFilledBlank = !hasOriginal && hasAnswer;
+                          const isCorrected = hasOriginal && hasAnswer && answerValue !== cellData.value;
+                          if (isFilledBlank) {
                             style.backgroundColor = '#eff6ff';
                             style.color = '#00529B';
                             style.fontWeight = 600;
+                          } else if (isCorrected) {
+                            style.backgroundColor = '#fffbeb';
+                            style.color = '#92400e';
+                            style.fontWeight = 600;
                           }
+
+                          // Prefer the operator's recorded answer, same
+                          // precedence as the export builders — otherwise a
+                          // correction to originally-filled text wouldn't
+                          // show up here even though it's in the download.
+                          const displayValue = hasAnswer ? answerValue : (hasOriginal ? cellData.value : '');
+
+                          // Total pixel height/width this cell spans (sums
+                          // across image-spanned rows & columns), used to
+                          // size the image area and reserve room below it
+                          // for the cell's own text.
+                          let totalHeight = rowMeta.height;
+                          let totalWidth = colWidthsEffective[cIdx] || 0;
+                          if (imageSpan) {
+                            totalHeight = 0;
+                            for (let r = 0; r < imageSpan.rowSpan; r++) {
+                              totalHeight += rowHeightsArray[imageSpan.startRowIdx + r] || 0;
+                            }
+                            totalWidth = 0;
+                            for (let c = 0; c < imageSpan.colSpan; c++) {
+                              totalWidth += colWidthsEffective[imageSpan.startColIdx + c] || 0;
+                            }
+                          }
+
+                          const imgAreaHeight = imageSpan
+                            ? (imageSpan.pxHeight
+                              ? Math.min(Math.max(20, Math.round(imageSpan.pxHeight)), Math.max(20, totalHeight - 20))
+                              : Math.max(20, Math.round(totalHeight * 0.72)))
+                            : 0;
 
                           return (
                             <td
                               key={key}
-                              rowSpan={span ? span.rowSpan : undefined}
-                              colSpan={span ? span.colSpan : undefined}
-                              className="border border-slate-200 px-1.5 text-[11px] bg-white"
+                              rowSpan={effectiveRowSpan}
+                              colSpan={effectiveColSpan}
+                              className="border border-slate-200 p-0 text-[11px] bg-white align-top"
                               style={style}
+                              title={isCorrected ? `Corrected from: ${cellData.value}` : undefined}
                             >
-                              {hasOriginal ? cellData.value : (answerValue || '')}
+                              {imageSpan ? (
+                                <div className="flex flex-col w-full h-full" style={{ minHeight: totalHeight }}>
+                                  <div
+                                    className="flex items-center justify-center overflow-hidden shrink-0"
+                                    style={{ width: totalWidth, height: imgAreaHeight }}
+                                  >
+                                    <img src={imageSpan.image.src} alt="" className="max-w-full max-h-full object-contain pointer-events-none" />
+                                  </div>
+                                  <div className="flex-1 min-h-0 px-1.5 py-0.5">
+                                    {displayValue}
+                                  </div>
+                                </div>
+                              ) : (
+                                <div className="px-1.5" style={{ height: rowMeta.height }}>
+                                  {displayValue}
+                                </div>
+                              )}
                             </td>
                           );
                         })}
@@ -185,21 +246,6 @@ export function SubmissionGridReview({ isOpen, onClose, workbook, answers, title
                   })}
                 </tbody>
               </table>
-
-              {/* Embedded images, positioned exactly where they anchor in the sheet */}
-              {(sheet.images || []).map((img, idx) => {
-                const rect = getImageRect(img.anchor, colWidthsEffective, rowHeightsArray);
-                if (!rect) return null;
-                return (
-                  <img
-                    key={idx}
-                    src={img.src}
-                    alt=""
-                    className="absolute pointer-events-none object-contain"
-                    style={{ top: rect.top, left: rect.left, width: rect.width, height: rect.height, zIndex: 5 }}
-                  />
-                );
-              })}
             </div>
 
             <div className="flex items-center gap-1 px-3 py-2 border-t border-slate-200 bg-slate-50 overflow-x-auto shrink-0">
@@ -214,9 +260,15 @@ export function SubmissionGridReview({ isOpen, onClose, workbook, answers, title
                   {s.name}
                 </button>
               ))}
-              <span className="ml-auto flex items-center gap-1.5 text-[11px] text-slate-500 px-2">
-                <span className="w-2.5 h-2.5 rounded bg-blue-50 border border-blue-200 inline-block" />
-                Operator-filled values
+              <span className="ml-auto flex items-center gap-3 text-[11px] text-slate-500 px-2">
+                <span className="flex items-center gap-1.5">
+                  <span className="w-2.5 h-2.5 rounded bg-blue-50 border border-blue-200 inline-block" />
+                  Operator-filled values
+                </span>
+                <span className="flex items-center gap-1.5">
+                  <span className="w-2.5 h-2.5 rounded bg-amber-50 border border-amber-200 inline-block" />
+                  Corrected original text
+                </span>
               </span>
             </div>
           </>

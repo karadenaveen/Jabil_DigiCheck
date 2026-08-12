@@ -40,10 +40,14 @@ export async function buildFilledWorkbookBuffer(gridData, answers = {}) {
         const answerValue = answers[answerKey];
 
         const hasOriginal = cellData && cellData.value !== '' && cellData.value !== undefined;
-        if (!hasOriginal && (answerValue === undefined || answerValue === '')) continue;
+        const hasAnswer = answerValue !== undefined && answerValue !== '';
+        if (!hasOriginal && !hasAnswer) continue;
 
         const cell = ws.getCell(r, c);
-        cell.value = hasOriginal ? cellData.value : answerValue;
+        // Prefer the operator's recorded answer (see matching comment in
+        // src/utils/excelParser.js) so corrections to originally-filled
+        // cells actually persist into the generated file.
+        cell.value = hasAnswer ? answerValue : cellData.value;
 
         if (cellData) {
           if (cellData.fill) {

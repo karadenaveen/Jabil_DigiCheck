@@ -42,6 +42,14 @@ export const createUser = async (req, res) => {
   try {
     const { name, ntid, username, password = 'password123', role = 'OPERATOR' } = req.body;
 
+    // Only Operator, Shift Leader, and Sub Admin accounts can be created —
+    // there is exactly one Main Admin (the seeded account), and it can't
+    // be created or duplicated through this endpoint.
+    const allowedRoles = ['OPERATOR', 'SHIFT_LEADER', 'SUBADMIN'];
+    if (!allowedRoles.includes(role)) {
+      return sendError(res, `Role must be one of: ${allowedRoles.join(', ')}.`, 400);
+    }
+
     const existingNTID = await userModel.findByUsernameOrNTID(ntid);
     if (existingNTID) {
       return sendError(res, `Account with NTID [${ntid}] already exists in system.`, 400);
@@ -82,6 +90,16 @@ export const createUser = async (req, res) => {
     return sendSuccess(res, allUsersResult.users, 'Operator account created successfully', 201);
   } catch (error) {
     logger.error('Error creating user:', error);
+    // MySQL throws this when a role like SHIFT_LEADER/SUBADMIN is inserted
+    // but the users.role ENUM in the database hasn't been migrated yet.
+    if (error.code === 'WARN_DATA_TRUNCATED' || error.code === 'ER_DATA_TOO_LONG' || error.code === 'ER_TRUNCATED_WRONG_VALUE_FOR_FIELD') {
+      return sendError(
+        res,
+        'This role isn\'t recognized by the database yet. Run migration_shiftleader_subadmin.sql against your database, then try again.',
+        500,
+        error
+      );
+    }
     return sendError(res, 'Failed to create operator account.', 500, error);
   }
 };

@@ -3,7 +3,7 @@ import {
   X, Search, ZoomIn, ZoomOut, ChevronUp, ChevronDown,
   FileSpreadsheet, Snowflake, Maximize2, ImagePlus, Save, Loader2, Trash2
 } from 'lucide-react';
-import { ROW_HEADER_WIDTH, colLetter, cellStyleToCss, buildMergeMaps, getImageRect } from '../../utils/excelGridHelpers';
+import { ROW_HEADER_WIDTH, colLetter, cellStyleToCss, buildMergeMaps, buildImageLayout } from '../../utils/excelGridHelpers';
 import { storageService } from '../../services/storageService';
 
 export function ExcelGridViewer({ isOpen, onClose, workbook, title, templateId, onSaved }) {
@@ -50,6 +50,12 @@ export function ExcelGridViewer({ isOpen, onClose, workbook, title, templateId, 
 
   // Merge lookup: top-left "r_c" -> {rowSpan, colSpan}; covered cells to skip
   const { mergeStarts, coveredCells } = useMemo(() => buildMergeMaps(sheet), [sheet]);
+
+  // Image layout: each image spans the cells it anchors over (like a native
+  // Excel merge) instead of floating as a separately-positioned overlay —
+  // keeps images contained inside their own cell/column instead of
+  // drifting over unrelated columns.
+  const imageLayout = useMemo(() => buildImageLayout(sheet), [sheet]);
 
   // Zoomed pixel dimensions — hidden columns/rows contribute 0px here,
   // matching the fact that they're skipped entirely in the rendered table.
@@ -421,10 +427,11 @@ export function ExcelGridViewer({ isOpen, onClose, workbook, title, templateId, 
                           const colNum = cIdx + 1;
                           if (hiddenColSet.has(colNum)) return null;
                           const key = `${rowMeta.index}_${colNum}`;
-                          if (coveredCells.has(key)) return null;
+                          if (coveredCells.has(key) || imageLayout.covered.has(key)) return null;
 
                           const cellData = sheet.cells[key];
                           const span = mergeStarts[key];
+                          const imageSpan = imageLayout.startMap[key];
                           const isSelected = selectedCell && selectedCell.r === rowMeta.index && selectedCell.c === colNum;
                           const isMatch = matches.some(m => m.r === rowMeta.index && m.c === colNum);
                           const isCurrentMatch = matches.length > 0 && matches[matchIndex % matches.length].r === rowMeta.index && matches[matchIndex % matches.length].c === colNum;
@@ -432,8 +439,11 @@ export function ExcelGridViewer({ isOpen, onClose, workbook, title, templateId, 
                           const isFrozenColCell = colNum <= xSplit;
                           const isFrozenRowCell = rowMeta.index <= ySplit;
 
+                          const effectiveRowSpan = imageSpan ? imageSpan.rowSpan : (span ? span.rowSpan : undefined);
+                          const effectiveColSpan = imageSpan ? imageSpan.colSpan : (span ? span.colSpan : undefined);
+
                           const style = {
-                            height: h,
+                            height: imageSpan ? undefined : h,
                             ...cellStyleToCss(cellData),
                             ...(isFrozenColCell ? { position: 'sticky', left: colOffsets[cIdx], zIndex: 10 } : {}),
                             ...(isFrozenRowCell ? { position: 'sticky', top: rowOffsets[rIdx], zIndex: isFrozenColCell ? 15 : 10 } : {}),
@@ -441,20 +451,72 @@ export function ExcelGridViewer({ isOpen, onClose, workbook, title, templateId, 
 
                           if (isMatch) style.backgroundColor = isCurrentMatch ? '#fbbf24' : '#fef3c7';
 
+                          // Total pixel height/width this cell spans (sums
+                          // across image-spanned rows & columns), used to
+                          // size the image area and reserve room below it
+                          // for the cell's own text.
+                          let totalHeight = h;
+                          let totalWidth = colWidthsZoomed[cIdx] || 0;
+                          if (imageSpan) {
+                            totalHeight = 0;
+                            for (let r = 0; r < imageSpan.rowSpan; r++) {
+                              totalHeight += rowHeightsZoomedArray[imageSpan.startRowIdx + r] || 0;
+                            }
+                            totalWidth = 0;
+                            for (let c = 0; c < imageSpan.colSpan; c++) {
+                              totalWidth += colWidthsZoomed[imageSpan.startColIdx + c] || 0;
+                            }
+                          }
+
+                          const imgAreaHeight = imageSpan
+                            ? (imageSpan.pxHeight
+                              ? Math.min(Math.max(20, Math.round(imageSpan.pxHeight * zoom)), Math.max(20, totalHeight - 20))
+                              : Math.max(20, Math.round(totalHeight * 0.72)))
+                            : 0;
+
                           return (
                             <td
                               key={key}
                               ref={(el) => { cellRefs.current[key] = el; }}
-                              rowSpan={span ? span.rowSpan : undefined}
-                              colSpan={span ? span.colSpan : undefined}
+                              rowSpan={effectiveRowSpan}
+                              colSpan={effectiveColSpan}
                               onClick={() => setSelectedCell({ r: rowMeta.index, c: colNum })}
-                              className={`border border-slate-200 px-1.5 text-[11px] text-slate-800 bg-white cursor-cell ${
+                              className={`border border-slate-200 p-0 text-[11px] text-slate-800 bg-white cursor-cell align-top ${
                                 isSelected ? 'ring-2 ring-inset ring-sky-500' : ''
                               }`}
                               style={style}
                               title={cellData && cellData.value !== '' ? String(cellData.value) : ''}
                             >
-                              {cellData ? cellData.value : ''}
+                              {imageSpan ? (
+                                <div className="flex flex-col w-full h-full group relative" style={{ minHeight: totalHeight }}>
+                                  <div
+                                    className="flex items-center justify-center overflow-hidden shrink-0"
+                                    style={{ width: totalWidth, height: imgAreaHeight }}
+                                  >
+                                    <img src={imageSpan.image.src} alt="" className="max-w-full max-h-full object-contain pointer-events-none" />
+                                  </div>
+                                  {templateId && (
+                                    <button
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        const idx = (sheet.images || []).indexOf(imageSpan.image);
+                                        if (idx !== -1) handleRemoveImage(idx);
+                                      }}
+                                      title="Remove this image"
+                                      className="absolute top-0.5 right-0.5 hidden group-hover:flex items-center justify-center w-5 h-5 rounded-full bg-rose-600 hover:bg-rose-700 text-white shadow"
+                                    >
+                                      <Trash2 className="w-3 h-3" />
+                                    </button>
+                                  )}
+                                  <div className="flex-1 min-h-0 px-1.5 py-0.5">
+                                    {cellData ? cellData.value : ''}
+                                  </div>
+                                </div>
+                              ) : (
+                                <div className="px-1.5" style={{ height: h }}>
+                                  {cellData ? cellData.value : ''}
+                                </div>
+                              )}
                             </td>
                           );
                         })}
@@ -463,30 +525,6 @@ export function ExcelGridViewer({ isOpen, onClose, workbook, title, templateId, 
                   })}
                 </tbody>
               </table>
-
-              {/* Embedded images, positioned exactly where they anchor in the sheet */}
-              {(sheet.images || []).map((img, idx) => {
-                const rect = getImageRect(img.anchor, colWidthsZoomed, rowHeightsZoomedArray, ROW_HEADER_WIDTH, zoom);
-                if (!rect) return null;
-                return (
-                  <div
-                    key={idx}
-                    className="absolute group"
-                    style={{ top: rect.top, left: rect.left, width: rect.width, height: rect.height, zIndex: 5 }}
-                  >
-                    <img src={img.src} alt="" className="w-full h-full object-contain pointer-events-none" />
-                    {templateId && (
-                      <button
-                        onClick={() => handleRemoveImage(idx)}
-                        title="Remove this image"
-                        className="absolute -top-2 -right-2 hidden group-hover:flex items-center justify-center w-5 h-5 rounded-full bg-rose-600 hover:bg-rose-700 text-white shadow"
-                      >
-                        <Trash2 className="w-3 h-3" />
-                      </button>
-                    )}
-                  </div>
-                );
-              })}
             </div>
 
             {/* Sheet tabs */}

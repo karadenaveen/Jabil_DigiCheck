@@ -6,7 +6,7 @@ import {
   FileSpreadsheet, Upload, Eye, Trash2, RefreshCw,
   Search, Filter, CheckCircle, FileText, Sparkles, ArrowRight, Grid3x3, AlertTriangle
 } from 'lucide-react';
-import { parseWorkbookFile, extractChecklistRows } from '../../utils/excelParser';
+import { parseWorkbookFile, extractChecklistRows, extractDocNumber } from '../../utils/excelParser';
 
 export function TemplatesPage() {
   const [activeTab, setActiveTab] = useState('library'); // 'library' or 'upload'
@@ -67,7 +67,12 @@ export function TemplatesPage() {
         }));
 
         const fileNameWithoutExt = file.name.replace(/\.[^/.]+$/, '');
-        const docNo = '43-ME80-F28-ASLY-' + Math.floor(10000 + Math.random() * 90000);
+
+        // Read the real Doc Number as it literally appears in the workbook
+        // (cover page or checksheet header cell) — only fall back to a
+        // generated placeholder if the file genuinely has none.
+        const extractedDocNo = extractDocNumber(rawWorkbook);
+        const docNo = extractedDocNo || ('43-ME80-F28-ASLY-' + Math.floor(10000 + Math.random() * 90000));
 
         const newBlueprint = {
           id: 'tmpl-' + Date.now(),
