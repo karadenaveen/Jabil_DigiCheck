@@ -73,6 +73,8 @@ export const login = async (req, res) => {
       role: user.role,
       status: user.status,
       avatar: user.avatar,
+      shiftLeaderId: user.shift_leader_id,
+      subAdminId: user.sub_admin_id,
       createdDate: user.created_at
     };
 

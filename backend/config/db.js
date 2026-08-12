@@ -318,6 +318,45 @@ export const initDB = async () => {
     await ensureColumn('submissions', 'grid_answers', 'LONGTEXT DEFAULT NULL AFTER `rejection_remark`');
     await ensureColumn('submissions', 'filled_excel_path', 'VARCHAR(255) DEFAULT NULL AFTER `grid_answers`');
 
+    // Self-healing for two-stage approval (migration_shiftleader_subadmin.sql)
+    await ensureColumn('submissions', 'shift_leader_name', 'VARCHAR(255) DEFAULT NULL AFTER `reviewed_by`');
+    await ensureColumn('submissions', 'shift_leader_reviewed_at', 'VARCHAR(100) DEFAULT NULL AFTER `shift_leader_name`');
+
+    // Self-healing for hierarchy grouping (migration_grouping.sql)
+    await ensureColumn('users', 'shift_leader_id', 'VARCHAR(50) DEFAULT NULL AFTER `avatar`');
+    await ensureColumn('users', 'sub_admin_id', 'VARCHAR(50) DEFAULT NULL AFTER `shift_leader_id`');
+    await ensureColumn('submissions', 'shift_leader_id', 'VARCHAR(50) DEFAULT NULL AFTER `operator_ntid`');
+    await ensureColumn('submissions', 'sub_admin_id', 'VARCHAR(50) DEFAULT NULL AFTER `shift_leader_id`');
+    await ensureColumn('submissions', 'sub_admin_name', 'VARCHAR(255) DEFAULT NULL AFTER `sub_admin_id`');
+    await ensureColumn('submissions', 'shift_leader_resubmitted_at', 'VARCHAR(100) DEFAULT NULL AFTER `shift_leader_reviewed_at`');
+    await ensureColumn('submissions', 'sub_admin_reviewed_at', 'VARCHAR(100) DEFAULT NULL AFTER `shift_leader_resubmitted_at`');
+    await ensureColumn('submissions', 'sub_admin_reviewed_by', 'VARCHAR(50) DEFAULT NULL AFTER `sub_admin_reviewed_at`');
+    await ensureColumn('submissions', 'final_approved_at', 'VARCHAR(100) DEFAULT NULL AFTER `sub_admin_reviewed_by`');
+
+    // Expand users.role ENUM for SUBADMIN + SHIFT_LEADER (safe re-run)
+    try {
+      await pool.query(`ALTER TABLE users MODIFY COLUMN role ENUM('ADMIN', 'SUBADMIN', 'SHIFT_LEADER', 'OPERATOR') NOT NULL DEFAULT 'OPERATOR';`);
+      logger.info('Migration: expanded users.role ENUM for SUBADMIN + SHIFT_LEADER');
+    } catch (error) {
+      logger.warn('Migration: could not expand users.role ENUM:', error.message);
+    }
+
+    // Expand submissions.status ENUM for two-stage workflow
+    try {
+      await pool.query(`ALTER TABLE submissions MODIFY COLUMN status ENUM('Pending', 'PendingAdmin', 'Approved', 'Rejected', 'RejectedByShiftLeader', 'RejectedByAdmin') DEFAULT 'Pending';`);
+      logger.info('Migration: expanded submissions.status ENUM for two-stage workflow');
+    } catch (error) {
+      logger.warn('Migration: could not expand submissions.status ENUM:', error.message);
+    }
+
+    // Expand approval_history.action ENUM for full audit timeline
+    try {
+      await pool.query(`ALTER TABLE approval_history MODIFY COLUMN action ENUM('APPROVED', 'REJECTED', 'RESUBMITTED', 'SUBMITTED', 'SHIFT_LEADER_APPROVED', 'SHIFT_LEADER_REJECTED', 'SHIFT_LEADER_RESUBMITTED', 'SUB_ADMIN_APPROVED', 'SUB_ADMIN_REJECTED') NOT NULL;`);
+      logger.info('Migration: expanded approval_history.action ENUM');
+    } catch (error) {
+      logger.warn('Migration: could not expand approval_history.action ENUM:', error.message);
+    }
+
     // 14. Seed Roles if empty
     const [roles] = await pool.query('SELECT COUNT(*) as count FROM roles');
     if (roles[0].count === 0) {

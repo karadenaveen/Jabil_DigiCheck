@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Bell, LogOut, LayoutDashboard, FileText, CheckCircle, Database, Settings, ClipboardList, XCircle, Clock, User, ShieldCheck } from 'lucide-react';
+import { Bell, LogOut, LayoutDashboard, FileText, CircleCheck as CheckCircle, Database, Settings, ClipboardList, Circle as XCircle, Clock, User, ShieldCheck, Layers } from 'lucide-react';
 import { storageService } from '../services/storageService';
 import { sortByLastActivityDesc } from '../utils/submissionTimeline';
 import companyLogo from '../assets/logo.png';
@@ -31,6 +31,7 @@ export function Header({
         { id: 'templates', label: 'Templates', icon: FileText },
         { id: 'approvals', label: 'Approvals', icon: CheckCircle },
         { id: 'records', label: 'Records', icon: Database },
+        { id: 'groups', label: 'Groups', icon: Layers },
         { id: 'settings', label: 'Settings', icon: Settings },
       ]
     : isSubAdmin

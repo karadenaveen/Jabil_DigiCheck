@@ -11,12 +11,23 @@ import fs from 'fs';
 import { fileURLToPath } from 'url';
 import { submissionModel } from '../models/submissionModel.js';
 import { templateModel } from '../models/templateModel.js';
+import { userModel } from '../models/userModel.js';
 import { auditModel } from '../models/auditModel.js';
 import { notificationModel } from '../models/notificationModel.js';
 import { withTransaction } from '../config/db.js';
 import { sendSuccess, sendError } from '../utils/response.js';
 import { logger } from '../utils/logger.js';
 import { buildFilledWorkbookBuffer } from '../utils/excelBuilder.js';
+
+// Build role-scoped filter for submission queries — each role sees only
+// the submissions in their slice of the hierarchy.
+function buildScope(user) {
+  if (!user) return null;
+  if (user.role === 'OPERATOR') return { role: 'OPERATOR', userId: user.id };
+  if (user.role === 'SHIFT_LEADER') return { role: 'SHIFT_LEADER', userId: user.id };
+  if (user.role === 'SUBADMIN') return { role: 'SUBADMIN', userId: user.id };
+  return null; // ADMIN sees all
+}
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -26,13 +37,17 @@ export const getSubmissions = async (req, res) => {
   try {
     const { page = 1, limit = 50, search = '', date = '', status = 'All', shift = '' } = req.query;
 
+    // Role-scoped filtering: each role sees only their slice of submissions.
+    const scope = buildScope(req.user);
+
     const result = await submissionModel.getSubmissions({
       page: parseInt(page, 10),
       limit: parseInt(limit, 10),
       search,
       date,
       status,
-      shift
+      shift,
+      scope
     });
 
     return sendSuccess(res, result.submissions, 'Submissions fetched successfully', 200, {
@@ -51,13 +66,26 @@ export const createSubmission = async (req, res) => {
   try {
     const submissionData = req.body;
 
+    // Derive hierarchy routing from the authenticated operator's user record
+    const operatorUser = req.user;
+    const shiftLeaderId = operatorUser?.shift_leader_id || null;
+    const subAdminId = operatorUser?.sub_admin_id || null;
+    let subAdminName = null;
+    if (subAdminId) {
+      const subAdmin = await userModel.findById(subAdminId);
+      subAdminName = subAdmin?.name || null;
+    }
+
     // Execute multi-table insertion inside an atomic MySQL Transaction
     const newSubmission = await withTransaction(async (dbConnection) => {
       const created = await submissionModel.createSubmission({
         ...submissionData,
-        userId: req.user ? req.user.id : 'usr-op1',
-        operatorName: req.user ? req.user.name : (submissionData.operatorName || 'Dummy Operator'),
-        operatorNTID: req.user ? req.user.ntid : (submissionData.operatorNTID || '1234567')
+        userId: operatorUser ? operatorUser.id : 'usr-op1',
+        operatorName: operatorUser ? operatorUser.name : (submissionData.operatorName || 'Dummy Operator'),
+        operatorNTID: operatorUser ? operatorUser.ntid : (submissionData.operatorNTID || '1234567'),
+        shiftLeaderId,
+        subAdminId,
+        subAdminName
       }, dbConnection);
 
       // Record Audit Log Event inside transaction
@@ -167,6 +195,10 @@ export const updateStatus = async (req, res) => {
         return sendError(res, 'Only Admin can give the final approval or rejection on a Shift-Leader-approved submission.', 403);
       }
       newStatus = decision === 'Approved' ? 'Approved' : 'RejectedByAdmin';
+      if (role === 'SUBADMIN') {
+        extra.subAdminReviewedAt = new Date().toLocaleString();
+        extra.subAdminReviewedBy = reviewerName;
+      }
     } else {
       return sendError(
         res,

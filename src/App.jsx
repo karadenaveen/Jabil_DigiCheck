@@ -16,6 +16,7 @@ import { TemplatesPage } from './components/admin/TemplatesPage';
 import { ApprovalsPage } from './components/admin/ApprovalsPage';
 import { RecordsPage } from './components/admin/RecordsPage';
 import { SettingsPage } from './components/admin/SettingsPage';
+import OperatorGroupsPage from './components/admin/OperatorGroupsPage';
 import { MyChecklistsPage } from './components/operator/MyChecklistsPage';
 import { ShiftLeaderApprovalsPage } from './components/shiftleader/ShiftLeaderApprovalsPage';
 
@@ -146,6 +147,7 @@ export default function App() {
         {activeTab === 'approvals' && <ApprovalsPage />}
         {activeTab === 'records' && <RecordsPage />}
         {activeTab === 'settings' && currentUser.role === 'ADMIN' && <SettingsPage />}
+        {activeTab === 'groups' && currentUser.role === 'ADMIN' && <OperatorGroupsPage />}
       </>
     )}
 

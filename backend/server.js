@@ -29,6 +29,7 @@ import submissionRoutes from './routes/submissionRoutes.js';
 import dashboardRoutes from './routes/dashboardRoutes.js';
 import aiRoutes from './routes/aiRoutes.js';
 import auditRoutes from './routes/auditRoutes.js';
+import assignmentRoutes from './routes/assignmentRoutes.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -76,6 +77,7 @@ app.use('/api/submissions', submissionRoutes);
 app.use('/api/dashboard', dashboardRoutes);
 app.use('/api/ai', aiRoutes);
 app.use('/api/audit-logs', auditRoutes);
+app.use('/api/assignments', assignmentRoutes);
 
 // 7. 404 Route Handler
 app.use('*', (req, res) => {

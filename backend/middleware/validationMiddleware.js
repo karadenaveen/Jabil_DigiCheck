@@ -42,6 +42,14 @@ export const validateCreateUser = [
     .optional()
     .isIn(['OPERATOR', 'SHIFT_LEADER', 'SUBADMIN'])
     .withMessage('Role must be one of Operator, Shift Leader, or Sub Admin.'),
+  body('shiftLeaderId')
+    .optional()
+    .isString()
+    .withMessage('Shift Leader ID must be a string.'),
+  body('subAdminId')
+    .optional()
+    .isString()
+    .withMessage('Sub Admin ID must be a string.'),
   handleValidationErrors
 ];
 

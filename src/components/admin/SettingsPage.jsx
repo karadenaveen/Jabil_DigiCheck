@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { storageService } from '../../services/storageService';
-import { Settings as IconSettings, UserPlus, ShieldAlert, CheckCircle, Ban, Key, UserCheck, Search, Crown } from 'lucide-react';
+import { Settings as IconSettings, UserPlus, ShieldAlert, CircleCheck as CheckCircle, Ban, Key, UserCheck, Search, Crown } from 'lucide-react';
 
 const ROLE_OPTIONS = [
   { value: 'OPERATOR', label: 'Operator' },
@@ -26,10 +26,22 @@ export function SettingsPage() {
   const [users, setUsers] = useState([]);
   const [searchQuery, setSearchQuery] = useState('');
   const [showAddModal, setShowAddModal] = useState(false);
+  const [shiftLeaders, setShiftLeaders] = useState([]);
+  const [subAdmins, setSubAdmins] = useState([]);
 
   useEffect(() => {
     fetchUsers();
+    fetchAssignmentOptions();
   }, []);
+
+  const fetchAssignmentOptions = async () => {
+    const [sl, sa] = await Promise.all([
+      storageService.getShiftLeaders(),
+      storageService.getSubAdmins()
+    ]);
+    setShiftLeaders(sl);
+    setSubAdmins(sa);
+  };
 
   const fetchUsers = async () => {
     const data = await storageService.getUsers();
@@ -41,7 +53,9 @@ export function SettingsPage() {
     ntid: '',
     username: '',
     password: 'password123',
-    role: 'OPERATOR'
+    role: 'OPERATOR',
+    shiftLeaderId: '',
+    subAdminId: ''
   });
 
   const handleToggleAccess = async (ntid) => {
@@ -66,12 +80,14 @@ export function SettingsPage() {
         ntid: newUser.ntid,
         username: newUser.username || newUser.name.toLowerCase().replace(/\s+/g, '.'),
         password: newUser.password || 'operator123',
-        role: newUser.role
+        role: newUser.role,
+        shiftLeaderId: newUser.shiftLeaderId || undefined,
+        subAdminId: newUser.subAdminId || undefined
       });
 
       setUsers(updated);
       setShowAddModal(false);
-      setNewUser({ name: '', ntid: '', username: '', password: 'password123', role: 'OPERATOR' });
+      setNewUser({ name: '', ntid: '', username: '', password: 'password123', role: 'OPERATOR', shiftLeaderId: '', subAdminId: '' });
     } catch (err) {
       alert(err.response?.data?.message || 'Failed to create operator account.');
     }
@@ -282,6 +298,38 @@ export function SettingsPage() {
                   ))}
                 </div>
               </div>
+
+              {newUser.role === 'OPERATOR' && shiftLeaders.length > 0 && (
+                <div>
+                  <label className="block font-bold text-slate-700 uppercase mb-1">Assign to Shift Leader</label>
+                  <select
+                    value={newUser.shiftLeaderId}
+                    onChange={(e) => setNewUser({ ...newUser, shiftLeaderId: e.target.value })}
+                    className="w-full p-2.5 bg-slate-50 border border-slate-300 rounded-xl"
+                  >
+                    <option value="">— Unassigned —</option>
+                    {shiftLeaders.map(sl => (
+                      <option key={sl.id} value={sl.id}>{sl.name} ({sl.ntid})</option>
+                    ))}
+                  </select>
+                </div>
+              )}
+
+              {(newUser.role === 'OPERATOR' || newUser.role === 'SHIFT_LEADER') && subAdmins.length > 0 && (
+                <div>
+                  <label className="block font-bold text-slate-700 uppercase mb-1">Assign to Sub Admin</label>
+                  <select
+                    value={newUser.subAdminId}
+                    onChange={(e) => setNewUser({ ...newUser, subAdminId: e.target.value })}
+                    className="w-full p-2.5 bg-slate-50 border border-slate-300 rounded-xl"
+                  >
+                    <option value="">— Unassigned —</option>
+                    {subAdmins.map(sa => (
+                      <option key={sa.id} value={sa.id}>{sa.name} ({sa.ntid})</option>
+                    ))}
+                  </select>
+                </div>
+              )}
 
               <div>
                 <label className="block font-bold text-slate-700 uppercase mb-1">Password</label>

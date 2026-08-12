@@ -1,9 +1,10 @@
 /**
  * User Data Access Model
  * --------------------------------------------------------------------
- * Encapsulates MySQL queries for system user operations, including authentication 
- * lookups, user creation with hashed credentials, soft deletes, access status toggles,
- * and paginated queries.
+ * Encapsulates MySQL queries for system user operations, including authentication
+ * lookups, user creation with hashed credentials + hierarchy assignment, soft
+ * deletes, access status toggles, paginated queries, and role-filtered lists
+ * for the grouping hierarchy (operators / shift leaders / sub admins).
  */
 
 import { pool } from '../config/db.js';
@@ -11,7 +12,8 @@ import { pool } from '../config/db.js';
 export const userModel = {
   findByUsernameOrNTID: async (identifier) => {
     const sql = `
-      SELECT id, role_id, name, username, ntid, password, role, status, avatar, created_at, updated_at
+      SELECT id, role_id, name, username, ntid, password, role, status, avatar,
+             shift_leader_id, sub_admin_id, created_at, updated_at
       FROM users
       WHERE (LOWER(username) = LOWER(?) OR ntid = ?) AND deleted_at IS NULL;
     `;
@@ -21,7 +23,8 @@ export const userModel = {
 
   findById: async (id) => {
     const sql = `
-      SELECT id, role_id, name, username, ntid, role, status, avatar, created_at, updated_at
+      SELECT id, role_id, name, username, ntid, role, status, avatar,
+             shift_leader_id, sub_admin_id, created_at, updated_at
       FROM users
       WHERE id = ? AND deleted_at IS NULL;
     `;
@@ -29,7 +32,7 @@ export const userModel = {
     return rows[0] || null;
   },
 
-  getUsers: async ({ page = 1, limit = 50, search = '', sortBy = 'created_at', sortOrder = 'DESC' }) => {
+  getUsers: async ({ page = 1, limit = 50, search = '', sortBy = 'created_at', sortOrder = 'DESC', role = '' }) => {
     const offset = (page - 1) * limit;
     let baseSql = `WHERE deleted_at IS NULL`;
     const queryParams = [];
@@ -40,6 +43,11 @@ export const userModel = {
       queryParams.push(pattern, pattern, pattern);
     }
 
+    if (role) {
+      baseSql += ` AND role = ?`;
+      queryParams.push(role);
+    }
+
     const validSortColumns = ['name', 'ntid', 'username', 'role', 'status', 'created_at'];
     const safeSortBy = validSortColumns.includes(sortBy) ? sortBy : 'created_at';
     const safeSortOrder = sortOrder.toUpperCase() === 'ASC' ? 'ASC' : 'DESC';
@@ -48,8 +56,14 @@ export const userModel = {
     const total = countRows[0].total;
 
     const sql = `
-      SELECT id, role_id, name, username, ntid, role, status, avatar, DATE_FORMAT(created_at, '%Y-%m-%d') as createdDate
-      FROM users
+      SELECT u.id, u.role_id, u.name, u.username, u.ntid, u.role, u.status, u.avatar,
+             u.shift_leader_id, u.sub_admin_id,
+             DATE_FORMAT(u.created_at, '%Y-%m-%d') as createdDate,
+             sl.name as shiftLeaderName,
+             sa.name as subAdminName
+      FROM users u
+      LEFT JOIN users sl ON sl.id = u.shift_leader_id AND sl.deleted_at IS NULL
+      LEFT JOIN users sa ON sa.id = u.sub_admin_id AND sa.deleted_at IS NULL
       ${baseSql}
       ORDER BY ${safeSortBy} ${safeSortOrder}
       LIMIT ? OFFSET ?;
@@ -66,7 +80,7 @@ export const userModel = {
     };
   },
 
-  createUser: async ({ name, username, ntid, password, role = 'OPERATOR', avatar, createdBy = 'ADMIN' }, dbConnection = null) => {
+  createUser: async ({ name, username, ntid, password, role = 'OPERATOR', avatar, createdBy = 'ADMIN', shiftLeaderId = null, subAdminId = null }, dbConnection = null) => {
     const executor = dbConnection || pool;
     const id = `usr-${Date.now()}`;
     const ROLE_ID_MAP = {
@@ -79,8 +93,9 @@ export const userModel = {
     const userAvatar = avatar || (name ? name.substring(0, 2).toUpperCase() : 'OP');
 
     const sql = `
-      INSERT INTO users (id, role_id, name, username, ntid, password, role, status, avatar, created_by, updated_by)
-      VALUES (?, ?, ?, ?, ?, ?, ?, 'ALLOWED', ?, ?, ?);
+      INSERT INTO users (id, role_id, name, username, ntid, password, role, status, avatar,
+                        shift_leader_id, sub_admin_id, created_by, updated_by)
+      VALUES (?, ?, ?, ?, ?, ?, ?, 'ALLOWED', ?, ?, ?, ?);
     `;
 
     await executor.query(sql, [
@@ -92,11 +107,66 @@ export const userModel = {
       password,
       role,
       userAvatar,
+      shiftLeaderId,
+      subAdminId,
       createdBy,
       createdBy
     ]);
 
     return userModel.findById(id);
+  },
+
+  updateAssignment: async (userId, { shiftLeaderId, subAdminId }, dbConnection = null) => {
+    const executor = dbConnection || pool;
+    await executor.query(`
+      UPDATE users
+      SET shift_leader_id = ?, sub_admin_id = ?, updated_at = CURRENT_TIMESTAMP
+      WHERE id = ? AND deleted_at IS NULL;
+    `, [shiftLeaderId || null, subAdminId || null, userId]);
+    return userModel.findById(userId);
+  },
+
+  // Role-filtered list: all users of a given role, optionally scoped to a
+  // parent in the hierarchy (e.g. operators under a specific shift leader).
+  // `parentField` is 'shift_leader_id' or 'sub_admin_id'.
+  getUsersByRole: async (role, { parentField = null, parentId = null, search = '' } = {}) => {
+    let sql = `
+      SELECT u.id, u.name, u.username, u.ntid, u.role, u.status, u.avatar,
+             u.shift_leader_id, u.sub_admin_id,
+             sl.name as shiftLeaderName,
+             sa.name as subAdminName
+      FROM users u
+      LEFT JOIN users sl ON sl.id = u.shift_leader_id AND sl.deleted_at IS NULL
+      LEFT JOIN users sa ON sa.id = u.sub_admin_id AND sa.deleted_at IS NULL
+      WHERE u.role = ? AND u.deleted_at IS NULL
+    `;
+    const params = [role];
+
+    if (parentField && parentId) {
+      sql += ` AND u.${parentField} = ?`;
+      params.push(parentId);
+    }
+
+    if (search) {
+      sql += ` AND (u.name LIKE ? OR u.ntid LIKE ? OR u.username LIKE ?)`;
+      const pattern = `%${search}%`;
+      params.push(pattern, pattern, pattern);
+    }
+
+    sql += ` ORDER BY u.name ASC;`;
+
+    const [rows] = await pool.query(sql, params);
+    return rows;
+  },
+
+  // Count operators assigned to a specific shift leader (for capacity check).
+  countOperatorsForShiftLeader: async (shiftLeaderId, dbConnection = null) => {
+    const executor = dbConnection || pool;
+    const [rows] = await executor.query(`
+      SELECT COUNT(*) as count FROM users
+      WHERE shift_leader_id = ? AND role = 'OPERATOR' AND deleted_at IS NULL;
+    `, [shiftLeaderId]);
+    return parseInt(rows[0].count, 10);
   },
 
   toggleAccessStatus: async (ntid, updatedBy = 'ADMIN', dbConnection = null) => {
@@ -106,7 +176,7 @@ export const userModel = {
 
     const newStatus = user.status === 'ALLOWED' ? 'DENIED' : 'ALLOWED';
     const sql = `
-      UPDATE users 
+      UPDATE users
       SET status = ?, updated_by = ?, updated_at = CURRENT_TIMESTAMP
       WHERE id = ?;
     `;
@@ -115,11 +185,10 @@ export const userModel = {
     return { ...user, status: newStatus };
   },
 
-  // Soft delete method as required in requirement #2
   softDeleteUser: async (id, deletedBy = 'ADMIN', dbConnection = null) => {
     const executor = dbConnection || pool;
     const sql = `
-      UPDATE users 
+      UPDATE users
       SET deleted_at = CURRENT_TIMESTAMP, updated_by = ?
       WHERE id = ?;
     `;

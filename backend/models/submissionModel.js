@@ -8,9 +8,26 @@
 import { pool } from '../config/db.js';
 
 export const submissionModel = {
-  getSubmissions: async ({ page = 1, limit = 50, search = '', date = '', status = 'All', shift = '' }) => {
+  getSubmissions: async ({ page = 1, limit = 50, search = '', date = '', status = 'All', shift = '', scope = null }) => {
     let baseSql = `WHERE s.deleted_at IS NULL`;
     const queryParams = [];
+
+    // Role-scoped filtering: restrict which submissions each role sees.
+    // scope = { role, userId } — operators see only their own, shift leaders
+    // see their assigned operators' submissions, sub admins see their
+    // assigned shift leaders' submissions, admin/subadmin-admin see all.
+    if (scope) {
+      if (scope.role === 'OPERATOR') {
+        baseSql += ` AND s.user_id = ?`;
+        queryParams.push(scope.userId);
+      } else if (scope.role === 'SHIFT_LEADER') {
+        baseSql += ` AND s.shift_leader_id = ?`;
+        queryParams.push(scope.userId);
+      } else if (scope.role === 'SUBADMIN') {
+        baseSql += ` AND s.sub_admin_id = ?`;
+        queryParams.push(scope.userId);
+      }
+    }
 
     if (search) {
       baseSql += ` AND (s.template_title LIKE ? OR s.operator_name LIKE ? OR s.doc_number LIKE ? OR s.operator_ntid LIKE ?)`;
@@ -41,9 +58,14 @@ export const submissionModel = {
       SELECT s.id, s.template_id as templateId, s.template_title as templateTitle,
              s.doc_number as docNumber, s.revision, s.shift, s.user_id as userId,
              s.operator_name as operatorName, s.operator_ntid as operatorNTID,
+             s.shift_leader_id as shiftLeaderId, s.sub_admin_id as subAdminId,
+             s.sub_admin_name as subAdminName,
              s.submitted_at as submittedAt, DATE_FORMAT(s.date, '%Y-%m-%d') as date,
              s.status, s.rejection_remark as rejectionRemark, s.reviewed_at as reviewedAt,
              s.shift_leader_name as shiftLeaderName, s.shift_leader_reviewed_at as shiftLeaderReviewedAt,
+             s.shift_leader_resubmitted_at as shiftLeaderResubmittedAt,
+             s.sub_admin_reviewed_at as subAdminReviewedAt, s.sub_admin_reviewed_by as subAdminReviewedBy,
+             s.final_approved_at as finalApprovedAt,
              s.grid_answers as gridAnswers, s.filled_excel_path as filledExcelPath, s.created_at as createdAt
       FROM submissions s
       ${baseSql}
@@ -102,9 +124,14 @@ export const submissionModel = {
       SELECT s.id, s.template_id as templateId, s.template_title as templateTitle,
              s.doc_number as docNumber, s.revision, s.shift, s.user_id as userId,
              s.operator_name as operatorName, s.operator_ntid as operatorNTID,
+             s.shift_leader_id as shiftLeaderId, s.sub_admin_id as subAdminId,
+             s.sub_admin_name as subAdminName,
              s.submitted_at as submittedAt, DATE_FORMAT(s.date, '%Y-%m-%d') as date,
              s.status, s.rejection_remark as rejectionRemark, s.reviewed_at as reviewedAt,
              s.shift_leader_name as shiftLeaderName, s.shift_leader_reviewed_at as shiftLeaderReviewedAt,
+             s.shift_leader_resubmitted_at as shiftLeaderResubmittedAt,
+             s.sub_admin_reviewed_at as subAdminReviewedAt, s.sub_admin_reviewed_by as subAdminReviewedBy,
+             s.final_approved_at as finalApprovedAt,
              s.grid_answers as gridAnswers, s.filled_excel_path as filledExcelPath, s.created_at as createdAt
       FROM submissions s
       WHERE s.id = ? AND s.deleted_at IS NULL
@@ -152,8 +179,10 @@ export const submissionModel = {
     const gridAnswersJson = submissionData.gridAnswers ? JSON.stringify(submissionData.gridAnswers) : null;
 
     const sql = `
-      INSERT INTO submissions (id, template_id, template_title, doc_number, revision, shift, user_id, operator_name, operator_ntid, submitted_at, date, status, rejection_remark, grid_answers, created_by, updated_by)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Pending', '', ?, ?, ?);
+      INSERT INTO submissions (id, template_id, template_title, doc_number, revision, shift, user_id, operator_name, operator_ntid,
+                               shift_leader_id, sub_admin_id, sub_admin_name,
+                               submitted_at, date, status, rejection_remark, grid_answers, created_by, updated_by)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Pending', '', ?, ?, ?);
     `;
 
     await executor.query(sql, [
@@ -166,6 +195,9 @@ export const submissionModel = {
       submissionData.userId || 'usr-op1',
       submissionData.operatorName,
       submissionData.operatorNTID,
+      submissionData.shiftLeaderId || null,
+      submissionData.subAdminId || null,
+      submissionData.subAdminName || null,
       submittedAt,
       dateStr,
       gridAnswersJson,
@@ -230,21 +262,34 @@ export const submissionModel = {
     // after Admin's own decision overwrites reviewed_by/reviewed_at.
     const shiftLeaderName = extra.shiftLeaderName ?? null;
     const shiftLeaderReviewedAt = extra.shiftLeaderName ? reviewedAt : null;
+    const finalApprovedAt = status === 'Approved' ? reviewedAt : null;
+    const subAdminReviewedAt = extra.subAdminReviewedAt ?? null;
+    const subAdminReviewedBy = extra.subAdminReviewedBy ?? null;
 
-    const sql = shiftLeaderName
-      ? `UPDATE submissions
-         SET status = ?, rejection_remark = ?, reviewed_at = ?, reviewed_by = ?,
-             shift_leader_name = ?, shift_leader_reviewed_at = ?,
-             updated_by = ?, updated_at = CURRENT_TIMESTAMP
-         WHERE id = ? AND deleted_at IS NULL;`
-      : `UPDATE submissions
-         SET status = ?, rejection_remark = ?, reviewed_at = ?, reviewed_by = ?,
-             updated_by = ?, updated_at = CURRENT_TIMESTAMP
-         WHERE id = ? AND deleted_at IS NULL;`;
-
-    const params = shiftLeaderName
-      ? [status, isRejection ? rejectionRemark : '', reviewedAt, reviewerName, shiftLeaderName, shiftLeaderReviewedAt, reviewerName, id]
-      : [status, isRejection ? rejectionRemark : '', reviewedAt, reviewerName, reviewerName, id];
+    let sql, params;
+    if (shiftLeaderName) {
+      sql = `UPDATE submissions
+             SET status = ?, rejection_remark = ?, reviewed_at = ?, reviewed_by = ?,
+                 shift_leader_name = ?, shift_leader_reviewed_at = ?,
+                 updated_by = ?, updated_at = CURRENT_TIMESTAMP
+             WHERE id = ? AND deleted_at IS NULL;`;
+      params = [status, isRejection ? rejectionRemark : '', reviewedAt, reviewerName, shiftLeaderName, shiftLeaderReviewedAt, reviewerName, id];
+    } else if (subAdminReviewedAt) {
+      sql = `UPDATE submissions
+             SET status = ?, rejection_remark = ?, reviewed_at = ?, reviewed_by = ?,
+                 sub_admin_reviewed_at = ?, sub_admin_reviewed_by = ?,
+                 final_approved_at = ?,
+                 updated_by = ?, updated_at = CURRENT_TIMESTAMP
+             WHERE id = ? AND deleted_at IS NULL;`;
+      params = [status, isRejection ? rejectionRemark : '', reviewedAt, reviewerName, subAdminReviewedAt, subAdminReviewedBy, finalApprovedAt, reviewerName, id];
+    } else {
+      sql = `UPDATE submissions
+             SET status = ?, rejection_remark = ?, reviewed_at = ?, reviewed_by = ?,
+                 final_approved_at = ?,
+                 updated_by = ?, updated_at = CURRENT_TIMESTAMP
+             WHERE id = ? AND deleted_at IS NULL;`;
+      params = [status, isRejection ? rejectionRemark : '', reviewedAt, reviewerName, finalApprovedAt, reviewerName, id];
+    }
 
     const [result] = await executor.query(sql, params);
 
@@ -279,9 +324,10 @@ export const submissionModel = {
       UPDATE submissions
       SET status = 'PendingAdmin', rejection_remark = '', reviewed_at = ?, reviewed_by = ?,
           shift_leader_name = ?, shift_leader_reviewed_at = ?,
+          shift_leader_resubmitted_at = ?,
           updated_by = ?, updated_at = CURRENT_TIMESTAMP
       WHERE id = ? AND deleted_at IS NULL;
-    `, [reviewedAt, reviewerName, reviewerName, reviewedAt, reviewerName, id]);
+    `, [reviewedAt, reviewerName, reviewerName, reviewedAt, reviewedAt, reviewerName, id]);
 
     if (!result.affectedRows) return null;
 

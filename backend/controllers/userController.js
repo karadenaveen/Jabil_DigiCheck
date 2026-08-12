@@ -40,7 +40,7 @@ export const getUsers = async (req, res) => {
 
 export const createUser = async (req, res) => {
   try {
-    const { name, ntid, username, password = 'password123', role = 'OPERATOR' } = req.body;
+    const { name, ntid, username, password = 'password123', role = 'OPERATOR', shiftLeaderId, subAdminId } = req.body;
 
     // Only Operator, Shift Leader, and Sub Admin accounts can be created —
     // there is exactly one Main Admin (the seeded account), and it can't
@@ -70,7 +70,9 @@ export const createUser = async (req, res) => {
       username: cleanUsername,
       password: hashedPassword,
       role,
-      createdBy: req.user ? req.user.name : 'ADMIN'
+      createdBy: req.user ? req.user.name : 'ADMIN',
+      shiftLeaderId: shiftLeaderId || null,
+      subAdminId: subAdminId || null
     });
 
     // Record Audit Log Event

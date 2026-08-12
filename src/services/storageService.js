@@ -225,6 +225,87 @@ export const storageService = {
     }
   },
 
+  // Assignment & Grouping APIs
+  getShiftLeaders: async (search = '') => {
+    try {
+      const res = await api.get('/assignments/shift-leaders', { params: { search } });
+      return res.data.data || [];
+    } catch (error) {
+      console.error('Error fetching shift leaders:', error);
+      return [];
+    }
+  },
+
+  getSubAdmins: async (search = '') => {
+    try {
+      const res = await api.get('/assignments/sub-admins', { params: { search } });
+      return res.data.data || [];
+    } catch (error) {
+      console.error('Error fetching sub admins:', error);
+      return [];
+    }
+  },
+
+  getOperators: async (search = '', shiftLeaderId = '') => {
+    try {
+      const res = await api.get('/assignments/operators', { params: { search, shiftLeaderId } });
+      return res.data.data || [];
+    } catch (error) {
+      console.error('Error fetching operators:', error);
+      return [];
+    }
+  },
+
+  getGroupingTree: async () => {
+    try {
+      const res = await api.get('/assignments/tree');
+      return res.data.data || null;
+    } catch (error) {
+      console.error('Error fetching grouping tree:', error);
+      return null;
+    }
+  },
+
+  assignOperator: async (operatorId, shiftLeaderId, subAdminId) => {
+    try {
+      const res = await api.post('/assignments/assign-operator', { operatorId, shiftLeaderId, subAdminId });
+      return res.data.data || null;
+    } catch (error) {
+      console.error('Error assigning operator:', error);
+      throw error;
+    }
+  },
+
+  assignShiftLeader: async (shiftLeaderId, subAdminId) => {
+    try {
+      const res = await api.post('/assignments/assign-shift-leader', { shiftLeaderId, subAdminId });
+      return res.data.data || null;
+    } catch (error) {
+      console.error('Error assigning shift leader:', error);
+      throw error;
+    }
+  },
+
+  getCapacity: async () => {
+    try {
+      const res = await api.get('/assignments/capacity');
+      return res.data.data || { maxOperatorsPerShiftLeader: 30 };
+    } catch (error) {
+      console.error('Error fetching capacity:', error);
+      return { maxOperatorsPerShiftLeader: 30 };
+    }
+  },
+
+  updateCapacity: async (maxOperators) => {
+    try {
+      const res = await api.put('/assignments/capacity', { maxOperators });
+      return res.data.data || null;
+    } catch (error) {
+      console.error('Error updating capacity:', error);
+      throw error;
+    }
+  },
+
   // Real-Time Dashboard Stats API
   getDashboardStats: async () => {
     try {
