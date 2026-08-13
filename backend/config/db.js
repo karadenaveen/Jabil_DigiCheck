@@ -332,6 +332,9 @@ export const initDB = async () => {
     await ensureColumn('submissions', 'sub_admin_reviewed_at', 'VARCHAR(100) DEFAULT NULL AFTER `shift_leader_resubmitted_at`');
     await ensureColumn('submissions', 'sub_admin_reviewed_by', 'VARCHAR(50) DEFAULT NULL AFTER `sub_admin_reviewed_at`');
     await ensureColumn('submissions', 'final_approved_at', 'VARCHAR(100) DEFAULT NULL AFTER `sub_admin_reviewed_by`');
+    await ensureColumn('submissions', 'resubmission_count', 'INT NOT NULL DEFAULT 0 AFTER `final_approved_at`');
+    await ensureColumn('submissions', 'last_resubmitted_at', 'VARCHAR(100) DEFAULT NULL AFTER `resubmission_count`');
+    await ensureColumn('submissions', 'operator_resubmitted_at', 'VARCHAR(100) DEFAULT NULL AFTER `last_resubmitted_at`');
 
     // Expand users.role ENUM for SUBADMIN + SHIFT_LEADER (safe re-run)
     try {

@@ -78,6 +78,8 @@ export function ChecklistFillView({ currentUser, template, activeShift, onBack, 
 
 function ChecklistFillViewLegacy({ currentUser, template, activeShift, onBack, mode = 'create', existingSubmission = null, onResubmitted = null }) {
   const isEditMode = mode === 'edit' && !!existingSubmission;
+  // Operator resubmits to Shift Leader; Shift Leader resubmits to Admin.
+  const isOperatorResubmit = isEditMode && existingSubmission?.status === 'RejectedByShiftLeader';
 
   const [activeSheetIndex, setActiveSheetIndex] = useState(0);
   const [isCoverModalOpen, setIsCoverModalOpen] = useState(false);
@@ -140,11 +142,14 @@ function ChecklistFillViewLegacy({ currentUser, template, activeShift, onBack, m
     setSubmitting(true);
     try {
       if (isEditMode) {
-        // Shift Leader editing an Admin-rejected submission: save the edited
-        // answers to the SAME record, then push it back to Admin for a
-        // fresh final decision — no new submission is created.
+        // Save the edited answers to the SAME record, then push it back to
+        // the appropriate reviewer for a fresh decision.
         await storageService.updateSubmissionChecks(existingSubmission.id, checks, proofPhotos);
-        await storageService.resubmitSubmissionToAdmin(existingSubmission.id);
+        if (isOperatorResubmit) {
+          await storageService.resubmitSubmissionToShiftLeader(existingSubmission.id);
+        } else {
+          await storageService.resubmitSubmissionToAdmin(existingSubmission.id);
+        }
         setSubmitted(true);
         if (onResubmitted) onResubmitted();
       } else {
@@ -163,7 +168,7 @@ function ChecklistFillViewLegacy({ currentUser, template, activeShift, onBack, m
         setSubmitted(true);
       }
     } catch (err) {
-      alert(err.response?.data?.message || (isEditMode ? 'Failed to resubmit checklist to Admin.' : 'Failed to submit checklist to backend.'));
+      alert(err.response?.data?.message || (isEditMode ? 'Failed to resubmit checklist.' : 'Failed to submit checklist to backend.'));
     } finally {
       setSubmitting(false);
     }
@@ -177,11 +182,15 @@ function ChecklistFillViewLegacy({ currentUser, template, activeShift, onBack, m
         </div>
         <div>
           <h2 className="text-2xl font-black text-slate-900">
-            {isEditMode ? 'Resubmitted to Admin Successfully!' : 'Checklist Submitted Successfully!'}
+            {isEditMode ? (isOperatorResubmit ? 'Resubmitted to Shift Leader Successfully!' : 'Resubmitted to Admin Successfully!') : 'Checklist Submitted Successfully!'}
           </h2>
           <p className="text-sm text-slate-500 mt-2">
             {isEditMode ? (
-              <>Your edits to <span className="font-bold text-[#00529B]">{template.title} ({activeShift})</span> have been resubmitted to Admin for a fresh final decision.</>
+              isOperatorResubmit ? (
+                <>Your edits to <span className="font-bold text-[#00529B]">{template.title} ({activeShift})</span> have been resubmitted to your Shift Leader for a fresh review.</>
+              ) : (
+                <>Your edits to <span className="font-bold text-[#00529B]">{template.title} ({activeShift})</span> have been resubmitted to Admin for a fresh final decision.</>
+              )
             ) : (
               <>Your checklist form for <span className="font-bold text-[#00529B]">{template.title} ({activeShift})</span> has been submitted to the Approvals Queue for QA Manager review.</>
             )}
@@ -192,7 +201,7 @@ function ChecklistFillViewLegacy({ currentUser, template, activeShift, onBack, m
             onClick={onBack}
             className="px-8 py-3.5 bg-[#00529B] hover:bg-blue-800 text-white font-bold text-sm rounded-xl shadow-lg transition"
           >
-            {isEditMode ? 'Back to Review Queue' : 'Back to My Checklists'}
+            {isEditMode ? (isOperatorResubmit ? 'Back to My Checklists' : 'Back to Review Queue') : 'Back to My Checklists'}
           </button>
         </div>
       </div>
@@ -210,16 +219,18 @@ function ChecklistFillViewLegacy({ currentUser, template, activeShift, onBack, m
         </div>
       )}
 
-      {/* Edit Mode Banner — Shift Leader editing an Admin-rejected submission */}
+      {/* Edit Mode Banner */}
       {isEditMode && (
         <div className="p-4 bg-orange-50 border border-orange-200 rounded-2xl flex items-start gap-3">
           <AlertCircle className="w-5 h-5 text-orange-600 shrink-0 mt-0.5" />
           <div className="text-xs text-orange-800">
-            <p className="font-bold">Editing an Admin-Rejected Submission</p>
+            <p className="font-bold">{isOperatorResubmit ? 'Editing a Shift-Leader-Rejected Submission' : 'Editing an Admin-Rejected Submission'}</p>
             <p className="mt-0.5 opacity-90">
               {existingSubmission?.rejectionRemark
-                ? <>Admin's remark: "{existingSubmission.rejectionRemark}"</>
-                : 'Make your corrections below, then resubmit to Admin for a fresh decision.'}
+                ? <>{isOperatorResubmit ? 'Shift Leader' : 'Admin'}'s remark: "{existingSubmission.rejectionRemark}"</>
+                : isOperatorResubmit
+                  ? 'Make your corrections below, then resubmit to your Shift Leader for a fresh review.'
+                  : 'Make your corrections below, then resubmit to Admin for a fresh decision.'}
             </p>
           </div>
         </div>
@@ -237,7 +248,7 @@ function ChecklistFillViewLegacy({ currentUser, template, activeShift, onBack, m
             className="text-slate-600 hover:text-slate-900 text-xs font-bold flex items-center gap-1.5 py-1 px-2 hover:bg-slate-200/60 rounded-lg transition"
           >
             <ArrowLeft className="w-4 h-4" />
-            <span>{isEditMode ? 'Back to Review Queue' : 'Back to Checklists'}</span>
+            <span>{isEditMode ? (isOperatorResubmit ? 'Back to My Checklists' : 'Back to Review Queue') : 'Back to Checklists'}</span>
           </button>
 
           {/* Template Sidebar Card */}
@@ -292,10 +303,10 @@ function ChecklistFillViewLegacy({ currentUser, template, activeShift, onBack, m
                 className="w-full py-3 bg-[#00529B] hover:bg-blue-800 text-white font-bold text-xs rounded-xl shadow-md transition flex items-center justify-center gap-2 disabled:opacity-60"
               >
                 <Send className="w-4 h-4" />
-                <span>{submitting ? (isEditMode ? 'Resubmitting...' : 'Submitting...') : (isEditMode ? 'Resubmit to Admin' : 'Submit Checklist')}</span>
+                <span>{submitting ? (isEditMode ? 'Resubmitting...' : 'Submitting...') : (isEditMode ? (isOperatorResubmit ? 'Resubmit to Shift Leader' : 'Resubmit to Admin') : 'Submit Checklist')}</span>
               </button>
               <p className="text-[10px] text-slate-400 text-center leading-tight">
-                {isEditMode ? 'This sends the SAME submission back to Admin with your edits.' : 'At least one sheet must contain data to enable submission'}
+                {isEditMode ? (isOperatorResubmit ? 'This sends the SAME submission back to your Shift Leader with your edits.' : 'This sends the SAME submission back to Admin with your edits.') : 'At least one sheet must contain data to enable submission'}
               </p>
             </div>
 

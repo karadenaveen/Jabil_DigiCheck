@@ -66,6 +66,8 @@ export const submissionModel = {
              s.shift_leader_resubmitted_at as shiftLeaderResubmittedAt,
              s.sub_admin_reviewed_at as subAdminReviewedAt, s.sub_admin_reviewed_by as subAdminReviewedBy,
              s.final_approved_at as finalApprovedAt,
+             s.resubmission_count as resubmissionCount, s.last_resubmitted_at as lastResubmittedAt,
+             s.operator_resubmitted_at as operatorResubmittedAt,
              s.grid_answers as gridAnswers, s.filled_excel_path as filledExcelPath, s.created_at as createdAt
       FROM submissions s
       ${baseSql}
@@ -132,6 +134,8 @@ export const submissionModel = {
              s.shift_leader_resubmitted_at as shiftLeaderResubmittedAt,
              s.sub_admin_reviewed_at as subAdminReviewedAt, s.sub_admin_reviewed_by as subAdminReviewedBy,
              s.final_approved_at as finalApprovedAt,
+             s.resubmission_count as resubmissionCount, s.last_resubmitted_at as lastResubmittedAt,
+             s.operator_resubmitted_at as operatorResubmittedAt,
              s.grid_answers as gridAnswers, s.filled_excel_path as filledExcelPath, s.created_at as createdAt
       FROM submissions s
       WHERE s.id = ? AND s.deleted_at IS NULL
@@ -325,9 +329,10 @@ export const submissionModel = {
       SET status = 'PendingAdmin', rejection_remark = '', reviewed_at = ?, reviewed_by = ?,
           shift_leader_name = ?, shift_leader_reviewed_at = ?,
           shift_leader_resubmitted_at = ?,
+          resubmission_count = resubmission_count + 1, last_resubmitted_at = ?,
           updated_by = ?, updated_at = CURRENT_TIMESTAMP
       WHERE id = ? AND deleted_at IS NULL;
-    `, [reviewedAt, reviewerName, reviewerName, reviewedAt, reviewedAt, reviewerName, id]);
+    `, [reviewedAt, reviewerName, reviewerName, reviewedAt, reviewedAt, reviewedAt, reviewerName, id]);
 
     if (!result.affectedRows) return null;
 
@@ -336,6 +341,34 @@ export const submissionModel = {
       INSERT INTO approval_history (id, submission_id, reviewer_id, action, remark, created_by, updated_by)
       VALUES (?, ?, ?, 'RESUBMITTED', ?, ?, ?);
     `, [historyId, id, reviewerId || 'usr-shiftleader', 'Edited and resubmitted to Admin for review.', reviewerName, reviewerName]);
+
+    return submissionModel.getSubmissionById(id);
+  },
+
+  // Operator edits & resends a Shift-Leader-rejected submission back to
+  // Shift Leader for a fresh review. Same record, no new row — just
+  // flips status back to 'Pending', bumps the resubmission counter, and
+  // stamps the operator resubmission timestamp.
+  resubmitToShiftLeader: async (id, operatorName = 'OPERATOR', operatorId = 'usr-op1', dbConnection = null) => {
+    const executor = dbConnection || pool;
+    const reviewedAt = new Date().toLocaleString();
+
+    const [result] = await executor.query(`
+      UPDATE submissions
+      SET status = 'Pending', rejection_remark = '',
+          resubmission_count = resubmission_count + 1,
+          last_resubmitted_at = ?, operator_resubmitted_at = ?,
+          updated_by = ?, updated_at = CURRENT_TIMESTAMP
+      WHERE id = ? AND deleted_at IS NULL;
+    `, [reviewedAt, reviewedAt, operatorName, id]);
+
+    if (!result.affectedRows) return null;
+
+    const historyId = `hist-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
+    await executor.query(`
+      INSERT INTO approval_history (id, submission_id, reviewer_id, action, remark, created_by, updated_by)
+      VALUES (?, ?, ?, 'RESUBMITTED', ?, ?, ?);
+    `, [historyId, id, operatorId || 'usr-op1', 'Operator edited and resubmitted to Shift Leader.', operatorName, operatorName]);
 
     return submissionModel.getSubmissionById(id);
   },

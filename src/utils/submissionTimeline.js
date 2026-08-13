@@ -21,7 +21,9 @@ export const getLastActivityAt = (sub) => {
   return Math.max(
     toTime(sub?.submittedAt),
     toTime(sub?.shiftLeaderReviewedAt),
-    toTime(sub?.reviewedAt)
+    toTime(sub?.reviewedAt),
+    toTime(sub?.operatorResubmittedAt),
+    toTime(sub?.lastResubmittedAt)
   );
 };
 
@@ -42,6 +44,15 @@ export const buildActivityTimeline = (sub) => {
       label: 'Submitted by Operator',
       who: sub.operatorName ? `${sub.operatorName} (NTID: ${sub.operatorNTID})` : null,
       at: sub.submittedAt,
+    });
+  }
+
+  if (sub.operatorResubmittedAt) {
+    steps.push({
+      key: 'opResubmit',
+      label: 'Edited & Resubmitted by Operator',
+      who: sub.operatorName ? `${sub.operatorName} (NTID: ${sub.operatorNTID})` : null,
+      at: sub.operatorResubmittedAt,
     });
   }
 

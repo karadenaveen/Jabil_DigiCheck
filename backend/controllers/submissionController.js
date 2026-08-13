@@ -356,20 +356,23 @@ export const updateChecks = async (req, res) => {
       return sendError(res, 'Submission not found.', 404);
     }
 
-    const role = req.user ? req.user.role : 'SHIFT_LEADER';
+    const role = req.user ? req.user.role : 'OPERATOR';
+    const isOperator = role === 'OPERATOR';
     const isShiftLeader = role === 'SHIFT_LEADER';
     const isAdminLike = role === 'ADMIN' || role === 'SUBADMIN';
-    if (!isShiftLeader && !isAdminLike) {
+    if (!isOperator && !isShiftLeader && !isAdminLike) {
       return sendError(res, `Access denied. Role '${role}' cannot edit submission answers.`, 403);
     }
 
-    // Editing is only allowed while it's actionable at the Shift Leader's
-    // stage — awaiting their first review, or bounced back by Admin.
-    if (!['Pending', 'RejectedByAdmin'].includes(existing.status)) {
+    // Shift Leader can edit while it's at their stage ('Pending' or
+    // 'RejectedByAdmin'). Operator can edit only when the Shift Leader
+    // bounced it back to them ('RejectedByShiftLeader').
+    const allowedStatuses = isOperator ? ['RejectedByShiftLeader'] : ['Pending', 'RejectedByAdmin'];
+    if (!allowedStatuses.includes(existing.status)) {
       return sendError(res, `This submission can't be edited while it's "${existing.status}".`, 409);
     }
 
-    const reviewerName = req.user ? req.user.name : 'SHIFT_LEADER';
+    const reviewerName = req.user ? req.user.name : (isOperator ? 'OPERATOR' : 'SHIFT_LEADER');
     const updated = await submissionModel.updateChecks(id, checks, proofPhotos, reviewerName);
 
     logger.info(`Submission ${id} checklist answers edited by ${reviewerName} (${role})`);
@@ -378,6 +381,66 @@ export const updateChecks = async (req, res) => {
   } catch (error) {
     logger.error('Error updating submission checks:', error);
     return sendError(res, 'Failed to update checklist answers.', 500, error);
+  }
+};
+
+export const resubmitToShiftLeader = async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const existing = await submissionModel.getSubmissionById(id);
+    if (!existing) {
+      return sendError(res, 'Submission not found.', 404);
+    }
+
+    const role = req.user ? req.user.role : 'OPERATOR';
+    const isOperator = role === 'OPERATOR';
+    if (!isOperator) {
+      return sendError(res, `Access denied. Only operators can resubmit to Shift Leader.`, 403);
+    }
+
+    if (existing.status !== 'RejectedByShiftLeader') {
+      return sendError(res, `Only a Shift-Leader-rejected submission can be resubmitted. Current status: "${existing.status}".`, 409);
+    }
+
+    const operatorName = req.user ? req.user.name : 'OPERATOR';
+
+    const updated = await withTransaction(async (dbConnection) => {
+      const result = await submissionModel.resubmitToShiftLeader(
+        id,
+        operatorName,
+        req.user ? req.user.id : 'usr-op1',
+        dbConnection
+      );
+
+      if (!result) {
+        throw Object.assign(new Error('Submission not found.'), { statusCode: 404 });
+      }
+
+      await auditModel.createLog({
+        userId: req.user ? req.user.id : null,
+        userName: operatorName,
+        userRole: role,
+        action: 'RESUBMIT_TO_SHIFT_LEADER',
+        resource: 'SUBMISSIONS',
+        details: { submissionId: id, newStatus: 'Pending' },
+        ipAddress: req.ip,
+        dbConnection
+      });
+
+      return result;
+    });
+
+    logger.info(`Submission ${id} edited & resubmitted to Shift Leader by ${operatorName} (${role})`);
+
+    const allSubsResult = await submissionModel.getSubmissions({ page: 1, limit: 100 });
+    return sendSuccess(res, allSubsResult.submissions, 'Submission resubmitted to Shift Leader for review.');
+  } catch (error) {
+    if (error.statusCode === 404) {
+      return sendError(res, 'Submission not found.', 404);
+    }
+    logger.error('Error resubmitting submission to shift leader:', error);
+    return sendError(res, 'Failed to resubmit submission.', 500, error);
   }
 };
 

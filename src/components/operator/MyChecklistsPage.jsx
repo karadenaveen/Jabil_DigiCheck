@@ -1,11 +1,12 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { storageService } from '../../services/storageService';
 import { ChecklistFillView } from './ChecklistFillView';
-import { ClipboardList, Clock, ArrowRight, ShieldCheck, CheckCircle2, AlertCircle, Search, FileSpreadsheet, X } from 'lucide-react';
+import { ClipboardList, Clock, ArrowRight, ShieldCheck, CircleCheck as CheckCircle2, CircleAlert as AlertCircle, Search, FileSpreadsheet, X } from 'lucide-react';
 
 export function MyChecklistsPage({ currentUser }) {
   const [activeShift, setActiveShift] = useState(() => storageService.getActiveShift());
   const [selectedTemplate, setSelectedTemplate] = useState(null);
+  const [editSubmission, setEditSubmission] = useState(null);
   const [templates, setTemplates] = useState([]);
   const [submissions, setSubmissions] = useState([]);
 
@@ -112,6 +113,7 @@ export function MyChecklistsPage({ currentUser }) {
       return;
     }
     setIsSearchOpen(false);
+    setEditSubmission(pastSub && isResubmittable(pastSub.status) ? pastSub : null);
     setSelectedTemplate(tmpl);
   };
 
@@ -123,8 +125,11 @@ export function MyChecklistsPage({ currentUser }) {
         activeShift={activeShift}
         onBack={() => {
           setSelectedTemplate(null);
+          setEditSubmission(null);
           fetchData();
         }}
+        mode={editSubmission ? 'edit' : 'create'}
+        existingSubmission={editSubmission}
       />
     );
   }

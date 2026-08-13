@@ -2,10 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { storageService } from '../../services/storageService';
 import { SubmissionGridReview } from './SubmissionGridReview';
 import { sortByLastActivityDesc, buildActivityTimeline } from '../../utils/submissionTimeline';
-import { 
-  CheckCircle, XCircle, Search, Calendar, Filter, 
-  Eye, FileText, Check, AlertTriangle, Clock, MessageSquare, Grid3x3
-} from 'lucide-react';
+import { CircleCheck as CheckCircle, Circle as XCircle, Search, Calendar, ListFilter as Filter, Eye, FileText, Check, TriangleAlert as AlertTriangle, Clock, MessageSquare, Grid3x3, RotateCw } from 'lucide-react';
 
 export function ApprovalsPage() {
   const [submissions, setSubmissions] = useState([]);
@@ -181,6 +178,12 @@ export function ApprovalsPage() {
                     }`}>
                       {sub.status === 'PendingAdmin' ? 'Awaiting You' : sub.status === 'RejectedByAdmin' ? 'Sent Back to Shift Leader' : sub.status}
                     </span>
+                    {(sub.resubmissionCount || 0) > 0 && (
+                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider bg-amber-100 text-amber-800 border border-amber-300">
+                        <RotateCw className="w-3 h-3" />
+                        Re-submit (×{sub.resubmissionCount})
+                      </span>
+                    )}
                   </div>
 
                   <div className="flex items-center justify-between text-xs text-slate-500 pt-2 border-t border-slate-100">

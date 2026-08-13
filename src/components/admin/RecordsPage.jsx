@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { storageService } from '../../services/storageService';
 import { SubmissionGridReview } from './SubmissionGridReview';
 import { sortByLastActivityDesc, buildActivityTimeline } from '../../utils/submissionTimeline';
-import { Database, Search, Download, Printer, Filter, FileText, CheckCircle, XCircle, Grid3x3, AlertTriangle } from 'lucide-react';
+import { Database, Search, Download, Printer, ListFilter as Filter, FileText, CircleCheck as CheckCircle, Circle as XCircle, Grid3x3, TriangleAlert as AlertTriangle, RotateCw } from 'lucide-react';
 
 export function RecordsPage() {
   const [submissions, setSubmissions] = useState([]);
@@ -67,13 +67,21 @@ export function RecordsPage() {
     Rejected: 'Rejected'
   }[status] || status);
 
+  const todayStr = new Date().toLocaleDateString('en-CA'); // YYYY-MM-DD
+
   const filtered = submissions.filter(sub => {
     const matchesSearch = 
       sub.templateTitle.toLowerCase().includes(searchQuery.toLowerCase()) ||
       sub.operatorName.toLowerCase().includes(searchQuery.toLowerCase()) ||
       sub.docNumber.toLowerCase().includes(searchQuery.toLowerCase());
-    
-    return matchesSearch && matchesStatusTab(sub.status, activeTab);
+
+    const isResubmission = (sub.resubmissionCount || 0) > 0;
+    // Normal (first-time) submissions only show for the current day.
+    // Re-submit / rework items stay visible across all days so they don't
+    // fall off the radar while waiting for action.
+    const matchesDay = isResubmission || (sub.date === todayStr);
+
+    return matchesSearch && matchesStatusTab(sub.status, activeTab) && matchesDay;
   });
 
   const exportExcel = () => {
@@ -161,6 +169,7 @@ export function RecordsPage() {
                 <th className="px-4 py-3">Operator (NTID)</th>
                 <th className="px-4 py-3">Activity Timeline (Live Date & Time)</th>
                 <th className="px-4 py-3">Status</th>
+                <th className="px-4 py-3">Type</th>
                 <th className="px-4 py-3">Remarks / Feedback</th>
                 <th className="px-4 py-3">Original Sheet</th>
               </tr>
@@ -200,6 +209,18 @@ export function RecordsPage() {
                     }`}>
                       {statusLabel(r.status)}
                     </span>
+                  </td>
+                  <td className="px-4 py-3">
+                    {(r.resubmissionCount || 0) > 0 ? (
+                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider bg-amber-100 text-amber-800 border border-amber-300">
+                        <RotateCw className="w-3 h-3" />
+                        Re-submit (×{r.resubmissionCount})
+                      </span>
+                    ) : (
+                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider bg-slate-100 text-slate-600 border border-slate-200">
+                        Normal
+                      </span>
+                    )}
                   </td>
                   <td className="px-4 py-3 text-slate-600 italic">
                     {r.rejectionRemark ? (

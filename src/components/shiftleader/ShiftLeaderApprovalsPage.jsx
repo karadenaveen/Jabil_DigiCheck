@@ -3,10 +3,7 @@ import { storageService } from '../../services/storageService';
 import { SubmissionGridReview } from '../admin/SubmissionGridReview';
 import { ChecklistFillView } from '../operator/ChecklistFillView';
 import { sortByLastActivityDesc, buildActivityTimeline } from '../../utils/submissionTimeline';
-import {
-  CheckCircle, XCircle, Search, Calendar, Eye, FileText, AlertTriangle,
-  Clock, MessageSquare, Grid3x3, Send, Pencil, RotateCcw, ShieldCheck
-} from 'lucide-react';
+import { CircleCheck as CheckCircle, Circle as XCircle, Search, Calendar, Eye, FileText, TriangleAlert as AlertTriangle, Clock, MessageSquare, Grid3x3, Send, Pencil, RotateCcw, ShieldCheck, RotateCw } from 'lucide-react';
 
 // Shift Leader is stage 1 of the two-stage approval workflow:
 //   Operator submits ('Pending') -> Shift Leader reviews
@@ -279,6 +276,12 @@ export function ShiftLeaderApprovalsPage({ currentUser }) {
                     <span className={`px-2.5 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider ${statusColor(sub.status)}`}>
                       {statusLabel(sub.status)}
                     </span>
+                    {(sub.resubmissionCount || 0) > 0 && (
+                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider bg-amber-100 text-amber-800 border border-amber-300">
+                        <RotateCw className="w-3 h-3" />
+                        Re-submit (×{sub.resubmissionCount})
+                      </span>
+                    )}
                   </div>
 
                   <div className="flex items-center justify-between text-xs text-slate-500 pt-2 border-t border-slate-100">

@@ -8,7 +8,7 @@
 import express from 'express';
 import {
   getSubmissions, createSubmission, updateStatus, resubmitToAdmin,
-  updateChecks, deleteSubmission, exportExcel
+  resubmitToShiftLeader, updateChecks, deleteSubmission, exportExcel
 } from '../controllers/submissionController.js';
 import { authenticateToken } from '../middleware/authMiddleware.js';
 import { requireAdminOrSubAdmin, requireApprovalStageRole } from '../middleware/roleMiddleware.js';
@@ -31,8 +31,13 @@ router.patch('/:id/status', requireApprovalStageRole, validateStatusUpdate, upda
 // Shift Leader edits & resends an Admin-rejected submission back to Admin.
 router.patch('/:id/resubmit-to-admin', requireApprovalStageRole, resubmitToAdmin);
 
-// Shift Leader edits checklist answers while a submission is at their stage.
-router.patch('/:id/checks', requireApprovalStageRole, updateChecks);
+// Operator edits & resends a Shift-Leader-rejected submission back to Shift Leader.
+router.patch('/:id/resubmit-to-shift-leader', resubmitToShiftLeader);
+
+// Shift Leader or Operator edits checklist answers while a submission is at
+// their respective stage. The controller enforces which role may act on which
+// status.
+router.patch('/:id/checks', updateChecks);
 
 router.delete('/:id', requireAdminOrSubAdmin, deleteSubmission);
 

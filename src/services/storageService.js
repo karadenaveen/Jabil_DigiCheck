@@ -212,6 +212,18 @@ export const storageService = {
     }
   },
 
+  // Operator edits & resends a Shift-Leader-rejected submission back to
+  // Shift Leader for a fresh review.
+  resubmitSubmissionToShiftLeader: async (id) => {
+    try {
+      const res = await api.patch(`/submissions/${id}/resubmit-to-shift-leader`);
+      return res.data.data || [];
+    } catch (error) {
+      console.error('Error resubmitting submission to shift leader via API:', error);
+      throw error;
+    }
+  },
+
   // Shift Leader edits row check marks (V/X per station) and proof photos
   // while reviewing, through the same full checklist edit form the
   // Operator uses.
