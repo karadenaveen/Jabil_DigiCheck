@@ -6,7 +6,8 @@
  */
 
 import express from 'express';
-import { authenticateToken, requireAdmin } from '../middleware/authMiddleware.js';
+import { authenticateToken } from '../middleware/authMiddleware.js';
+import { requireAdmin } from '../middleware/roleMiddleware.js';
 import {
   getShiftLeaders,
   getSubAdmins,
